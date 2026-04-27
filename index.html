@@ -158,11 +158,12 @@
     <div style="display:flex; gap:24px; align-items:stretch; flex:1; min-height:0;">
       <!-- SIDEBAR: Track Pool -->
       <div class="card" style="width: 380px; flex-shrink: 0; display:flex; flex-direction:column;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
           <h2 style="margin:0;">Catálogo (<span id="poolCount">0</span>)</h2>
-          <button class="btn secondary" style="padding:6px 12px; font-size:12px;" onclick="renderPool()">Actualizar</button>
+          <button class="btn secondary" style="padding:6px 12px; font-size:12px;" onclick="forcePoolRefresh()" title="Refrescar catálogo ahora con nuevos artistas">🔄 Nuevo lote</button>
         </div>
-        <p class="muted" style="margin-top:0; margin-bottom:12px;">Haz clic en una canción para reproducirla ahora.</p>
+        <p class="muted" style="margin-top:0; margin-bottom:6px;">Click en una canción para reproducirla. El catálogo se renueva cada 2h con artistas nuevos.</p>
+        <p class="muted" id="nextRefreshLabel" style="margin-top:0; margin-bottom:12px; font-size:11px; color: var(--accent-2);">—</p>
         <div class="pool-list" id="poolList" style="flex:1;">
           <p class="muted" style="text-align:center;padding:20px;">Esperando canciones...</p>
         </div>
@@ -360,7 +361,11 @@ const state = {
   userMarket: "US", // Default to US
   history: [],
   isBuildingPool: false,
+  nextPoolRefresh: 0, // timestamp del próximo refresh automático
 };
+
+// Cada cuántos ms se refresca el catálogo automáticamente
+const POOL_REFRESH_MS = 2 * 60 * 60 * 1000; // 2 horas
 
 /* ---- Utilidades ---- */
 const $ = id => document.getElementById(id);
@@ -683,8 +688,10 @@ async function buildTrackPool(){
     // Shuffle final
     state.trackPool = unique.sort(() => Math.random() - 0.5);
     state.lastShift = getCurrentShift();
-    log(`✓ ${unique.length} canciones cargadas (turno ${state.lastShift})`,"ok");
+    state.nextPoolRefresh = Date.now() + POOL_REFRESH_MS;
+    log(`✓ ${unique.length} canciones cargadas (turno ${state.lastShift}) — próximo refresh en 2h`,"ok");
     renderPool();
+    renderNextRefresh();
 
   } catch(e) {
     log("Error construyendo pool: "+e.message,"err");
@@ -720,47 +727,68 @@ async function playNextRandom(){
   }
 
   try{
-    // Reproducir primero para activar el dispositivo
-    await api(`/me/player/play?device_id=${state.deviceId}`, {
-      method:"PUT",
-      body: JSON.stringify({ uris:[track.uri] })
-    });
-    
+    await playWithRetry(track.uri);
     log("▶ "+track.name+" — "+track.artists.map(a=>a.name).join(", "));
 
     // Ajustes de estado en paralelo para no bloquear
     api("/me/player/shuffle?state=false", { method:"PUT" }).catch(()=>{});
     api("/me/player/repeat?state=off", { method:"PUT" }).catch(()=>{});
-    
+
     renderPool();
   } catch(e){
     log("Error reproduciendo: "+e.message,"err");
-    toast("Error al cambiar canción","error");
+    explainPlaybackError(e);
   }
+}
+
+/* Helper: intenta reproducir, si falla por device inactivo o 403 reintenta
+   transfiriendo el playback al device de la app. */
+async function playWithRetry(uri){
+  const body = JSON.stringify({ uris:[uri] });
+  try{
+    await api(`/me/player/play?device_id=${state.deviceId}`, { method:"PUT", body });
+    return;
+  } catch(e){
+    const msg = e.message || "";
+    // 404 = NO_ACTIVE_DEVICE  ·  403 = device en standby  ·  502 = transient
+    if(msg.includes("404") || msg.includes("NO_ACTIVE_DEVICE") || msg.includes("403") || msg.includes("502")){
+      log("Device inactivo. Activando 'Turno Player 24/7'…","warn");
+      await transferPlaybackHere(true);
+      await sleep(800);
+      await api(`/me/player/play?device_id=${state.deviceId}`, { method:"PUT", body });
+      return;
+    }
+    throw e;
+  }
+}
+
+function explainPlaybackError(e){
+  const m = (e.message||"").toLowerCase();
+  if(m.includes("premium")) toast("Esta cuenta no es Premium. Spotify solo deja reproducir desde la API con Premium.","error");
+  else if(m.includes("403")) toast("Spotify rechazó la reproducción (403). Revisa que tu cuenta esté agregada en User Management del Spotify Dashboard.","error");
+  else if(m.includes("404") || m.includes("no_active_device")) toast("No hay dispositivo activo. Cierra Spotify en otros dispositivos y reintenta.","error");
+  else toast("Error al cambiar canción: "+e.message,"error");
 }
 
 async function playSpecificTrack(index){
   if(!state.deviceId){ toast("Esperando conexión con Spotify...","warn"); return; }
-  
+
   const track = state.trackPool.splice(index, 1)[0];
-  
+
   if(state.currentTrack) {
     state.history.push({ uri: state.currentTrack.uri, name: state.currentTrack.name, artists: state.currentTrack.artists });
     if(state.history.length > 50) state.history.shift();
   }
 
   try {
-    await api(`/me/player/play?device_id=${state.deviceId}`, {
-      method:"PUT",
-      body: JSON.stringify({ uris:[track.uri] })
-    });
+    await playWithRetry(track.uri);
     log("▶ "+track.name+" — "+track.artists.map(a=>a.name).join(", "));
     api("/me/player/shuffle?state=false", { method:"PUT" }).catch(()=>{});
     api("/me/player/repeat?state=off", { method:"PUT" }).catch(()=>{});
     renderPool();
   } catch(e) {
     log("Error reproduciendo: "+e.message,"err");
-    toast("Error al reproducir canción","error");
+    explainPlaybackError(e);
     // Restaurar si falla
     state.trackPool.splice(index, 0, track);
     renderPool();
@@ -782,12 +810,14 @@ async function playPrevious(){
   } catch(e) { log("Error historial: "+e.message,"err"); }
 }
 
-async function transferPlaybackHere(){
+async function transferPlaybackHere(forcePlay=false){
   try{
     await api("/me/player", {
       method:"PUT",
-      body: JSON.stringify({ device_ids:[state.deviceId], play:false })
+      body: JSON.stringify({ device_ids:[state.deviceId], play: !!forcePlay })
     });
+    // Esperamos a que Spotify procese el cambio de device
+    await sleep(700);
   } catch(e){ log("Transfer: "+e.message,"warn") }
 }
 
@@ -806,7 +836,7 @@ window.onSpotifyWebPlaybackSDKReady = () => {
   player.addListener("ready", async ({device_id}) => {
     state.deviceId = device_id;
     log("✓ Dispositivo listo: "+device_id,"ok");
-    await transferPlaybackHere();
+    await transferPlaybackHere(false);
     
     // Obtenemos perfil de usuario para el market
     try {
@@ -963,6 +993,8 @@ async function triggerBreakNow(){
 function breakWatcher(){
   setInterval(async () => {
     updateCountdown();
+    renderNextRefresh();
+
     if(state.token && Date.now() >= state.tokenExpiresAt - 60000){
       await refreshAccessToken();
     }
@@ -972,18 +1004,43 @@ function breakWatcher(){
       updateShiftUI();
       buildTrackPool();
     }
+
+    // Refresh automático del catálogo cada 2 horas — agarra nuevos artistas
+    if(state.nextPoolRefresh && Date.now() >= state.nextPoolRefresh && !state.isBuildingPool){
+      log("🔄 Refresh automático del catálogo (cada 2h)…","warn");
+      buildTrackPool();
+    }
+
     const now = new Date();
     const current = `${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
     const key = `${now.getHours()}:${now.getMinutes()}`;
-    
+
     const sched = getDailySchedule();
     const slot = sched.find(x => x.time === current);
-    
+
     if(slot && now.getSeconds()<2 && key !== state.lastTriggeredKey){
       state.lastTriggeredKey = key;
       runBreak(slot.file);
     }
   }, 1000);
+}
+
+async function forcePoolRefresh(){
+  if(state.isBuildingPool){ toast("Ya se está actualizando…","warn"); return; }
+  log("🔄 Refresh manual del catálogo (nuevos artistas)…","warn");
+  await buildTrackPool();
+  toast("Catálogo renovado");
+}
+
+function renderNextRefresh(){
+  const el = document.getElementById("nextRefreshLabel");
+  if(!el) return;
+  if(!state.nextPoolRefresh){ el.textContent = "—"; return; }
+  const diff = Math.max(0, state.nextPoolRefresh - Date.now());
+  const h = Math.floor(diff/3600000);
+  const m = Math.floor((diff%3600000)/60000);
+  const s = Math.floor((diff%60000)/1000);
+  el.textContent = `Próximo refresh: ${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
 }
 
 /* ==========================================================
