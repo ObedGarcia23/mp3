@@ -1587,7 +1587,6 @@
        ========================================================== */
     async function boot() {
       load();
-      $("currentUrl").textContent = window.location.origin + window.location.pathname;
       $("loginBtn").onclick = loginWithSpotify;
 
       if (window.location.search.includes("code=")) {
