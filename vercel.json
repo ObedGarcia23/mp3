@@ -6,7 +6,9 @@
       "source": "/(.*)",
       "headers": [
         { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        { "key": "Permissions-Policy", "value": "autoplay=*, microphone=()" },
+        { "key": "Cross-Origin-Resource-Policy", "value": "same-origin" }
       ]
     },
     {
@@ -19,7 +21,8 @@
       "source": "/(.*\\.mp3)",
       "headers": [
         { "key": "Cache-Control", "value": "public, max-age=86400" },
-        { "key": "Content-Type", "value": "audio/mpeg" }
+        { "key": "Content-Type", "value": "audio/mpeg" },
+        { "key": "Accept-Ranges", "value": "bytes" }
       ]
     }
   ]

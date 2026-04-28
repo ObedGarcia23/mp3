@@ -1460,13 +1460,22 @@
     /* ==========================================================
        Pausas ergonómicas
        ========================================================== */
+    function getMp3Url(num) {
+      // Construye una URL absoluta basada en la ubicación actual de index.html
+      // para evitar errores 403/404 causados por rutas relativas "./" que se
+      // resuelven mal dependiendo del servidor o subpath de despliegue.
+      const base = (window.location.origin + window.location.pathname)
+        .replace(/\/[^/]*$/, "/"); // quita "index.html" o el segmento final
+      return base + `Ejercicio${num}.mp3`;
+    }
+
     function getDailySchedule() {
       const sched = [];
       for (let i = 1; i <= 3; i++) {
         const timeStr = state.exTimes[i];
         if (!timeStr) continue;
         const [h, m] = timeStr.split(":").map(Number);
-        const audioPath = `./Ejercicio${i}.mp3`;
+        const audioPath = getMp3Url(i);
         sched.push({ time: timeStr, file: audioPath, id: i });
 
         const h12 = (h + 12) % 24;
