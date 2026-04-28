@@ -899,6 +899,9 @@
         <div class="status">
           <span class="pill" id="shiftPill">Turno: día</span>
           <span class="pill live" id="livePill">● conectado</span>
+          <span class="pill" id="watchdogPill" onclick="toggleWatchdog247()"
+            style="cursor:pointer;border-color:#1ed760;color:#1ed760"
+            title="Modo 24/7 activo — click para desactivar">🛡 24/7</span>
           <button class="btn secondary" onclick="logout()" style="padding:6px 12px;font-size:12px">Cerrar
             sesión</button>
         </div>
@@ -1154,6 +1157,20 @@
         id: "chillvibes", label: "Chill / Lo-fi (solo día)", nightSafe: false,
         artists: ["ODESZA", "Bonobo", "Tycho", "Rüfüs Du Sol", "Emancipator", "Nujabes", "Jinsang"]
       },
+      {
+        id: "cristiana", label: "Música Cristiana", nightSafe: true,
+        artists: [
+          "Hillsong United", "Hillsong Worship", "Hillsong en Español",
+          "Bethel Music", "Elevation Worship", "Elevation Worship Español",
+          "Marcos Witt", "Christine D'Clario", "Jesús Adrián Romero",
+          "Marcela Gándara", "Alex Campos", "Tercer Cielo", "Funky",
+          "Aliento", "Lakewood Music", "Julissa", "Generación 12",
+          "Miel San Marcos", "Marco Barrientos", "Ingrid Rosario",
+          "Lauren Daigle", "Chris Tomlin", "Phil Wickham", "Brandon Lake",
+          "Maverick City Music", "Cory Asbury", "Pat Barrett",
+          "Un Corazón", "Evan Craft", "TobyMac", "Lecrae"
+        ]
+      },
     ];
 
     /* Cache de artist IDs (evita re-buscar cada vez) */
@@ -1186,10 +1203,23 @@
       playedThisShift: new Set(),
       isBuildingPool: false,
       nextPoolRefresh: 0, // timestamp del próximo refresh automático
+
+      /* ---- Watchdog 24/7 ---- */
+      watchdog247: true,         // master switch del modo 24/7
+      lastWatchdogUri: null,
+      lastWatchdogPos: -1,
+      stuckCounter: 0,           // ciclos consecutivos sin avanzar
+      advancingNext: false,      // flag para no programar varios "siguiente" simultáneos
+      lastAutoResumeAt: 0,       // throttle para no resumir 1000 veces por segundo
+      sdkReconnectAttempt: 0,
     };
 
     // Cada cuántos ms se refresca el catálogo automáticamente
     const POOL_REFRESH_MS = 2 * 60 * 60 * 1000; // 2 horas
+    // Watchdog: cada cuánto verifica el estado real de Spotify
+    const WATCHDOG_INTERVAL_MS = 5000;
+    // Cuántos ciclos del watchdog sin avanzar = track stuck (5s * 3 = 15s)
+    const WATCHDOG_STUCK_LIMIT = 3;
 
     /* ---- Utilidades ---- */
     const $ = id => document.getElementById(id);
@@ -1697,6 +1727,7 @@
 
       player.addListener("ready", async ({ device_id }) => {
         state.deviceId = device_id;
+        state.sdkReconnectAttempt = 0;
         log("✓ Dispositivo listo: " + device_id, "ok");
         await transferPlaybackHere(false);
 
@@ -1709,12 +1740,31 @@
 
         $("livePill").textContent = "● conectado";
         $("livePill").className = "pill live";
+
+        // Arrancar watchdog 24/7 una vez que el device está listo
+        startPlaybackWatchdog();
       });
-      player.addListener("not_ready", ({ device_id }) => {
-        log("Dispositivo desconectado: " + device_id, "warn");
-        $("livePill").textContent = "● desconectado";
-        $("livePill").style.borderColor = "#ef4444";
-        $("livePill").style.color = "#ef4444";
+      player.addListener("not_ready", async ({ device_id }) => {
+        log("Dispositivo desconectado: " + device_id + " — intentando reconectar…", "warn");
+        $("livePill").textContent = "● reconectando";
+        $("livePill").style.borderColor = "#f5a524";
+        $("livePill").style.color = "#f5a524";
+
+        // Reconexión exponencial (max 30s entre intentos)
+        const tryReconnect = async () => {
+          state.sdkReconnectAttempt = (state.sdkReconnectAttempt || 0) + 1;
+          const wait = Math.min(30000, 2000 * Math.pow(1.5, state.sdkReconnectAttempt - 1));
+          log(`🔁 Reintento SDK #${state.sdkReconnectAttempt} en ${Math.round(wait / 1000)}s`, "warn");
+          await sleep(wait);
+          try {
+            const ok = await state.player.connect();
+            if (!ok) tryReconnect();
+          } catch (e) {
+            log("Reconexión SDK falló: " + e.message, "err");
+            tryReconnect();
+          }
+        };
+        tryReconnect();
       });
       player.addListener("player_state_changed", (s) => {
         if (!s) return;
@@ -1979,6 +2029,155 @@
       await playExerciseAudio(num);
     }
 
+    /* ==========================================================
+       Watchdog 24/7 — la pieza clave para producción
+       Cada 5 segundos consulta el estado REAL de Spotify y
+       garantiza que la música nunca se detenga, salvo durante
+       una pausa ergonómica.
+
+       Recupera de:
+       - SDK device dropped / token vencido
+       - Pausa accidental (usuario, fin de canción, fade out de
+         Spotify cuando otro device toma control)
+       - Track stuck (no avanza progreso por 15s)
+       - Otro device tomó el control de la cuenta
+       - Fin de canción que el SDK no notificó
+       ========================================================== */
+    async function playbackWatchdog() {
+      try {
+        if (!state.watchdog247) return;          // modo 24/7 deshabilitado
+        if (state.breakInProgress) return;       // no interferir con ejercicio
+        if (!state.token || !state.deviceId) return;
+        if (state.isBuildingPool && !state.trackPool.length) return; // todavía sin canciones
+
+        // Consultar estado actual de Spotify (no del SDK, sino de la cuenta)
+        let cur;
+        try {
+          cur = await api("/me/player");
+        } catch (e) {
+          // 401/403/etc — el ensureValidToken adentro de api() ya intenta refrescar.
+          // Si igual falla, no hacemos nada en este ciclo.
+          return;
+        }
+
+        // CASO 1: nunca se inició playback en esta cuenta
+        if (!cur || !cur.item) {
+          if (Date.now() - state.lastAutoResumeAt < 8000) return; // throttle
+          state.lastAutoResumeAt = Date.now();
+          log("🛡 Watchdog: sin playback activo, iniciando…", "warn");
+          await playNextRandom();
+          return;
+        }
+
+        // CASO 2: otro device tomó el control (móvil, desktop app, etc.)
+        if (cur.device && cur.device.id !== state.deviceId) {
+          if (Date.now() - state.lastAutoResumeAt < 8000) return;
+          state.lastAutoResumeAt = Date.now();
+          log(`🛡 Watchdog: otro device (${cur.device.name}) tomó el control, recuperando…`, "warn");
+          await transferPlaybackHere(true);
+          await sleep(900);
+          // Re-consultar y si sigue sin sonar, lanzar siguiente
+          try {
+            const fresh = await api("/me/player");
+            if (!fresh || !fresh.is_playing) await playNextRandom();
+          } catch (e) { /* ignorar */ }
+          return;
+        }
+
+        // CASO 3: pausado pero debería estar sonando
+        if (!cur.is_playing) {
+          if (Date.now() - state.lastAutoResumeAt < 6000) return;
+          state.lastAutoResumeAt = Date.now();
+
+          const dur = cur.item?.duration_ms || 0;
+          const pos = cur.progress_ms || 0;
+          // Si la canción terminó (cerca del fin o exactamente en 0) → siguiente
+          if (dur === 0 || pos === 0 || (dur - pos) < 3000) {
+            log("🛡 Watchdog: track terminado, siguiente canción…", "warn");
+            await playNextRandom();
+          } else {
+            // Si quedó pausado a mitad de la canción → reanudar
+            log("🛡 Watchdog: pausado detectado, reanudando…", "warn");
+            try {
+              await api(`/me/player/play?device_id=${state.deviceId}`, { method: "PUT" });
+            } catch (e) {
+              // Si reanudar falla, fuerza siguiente
+              await playNextRandom();
+            }
+          }
+          return;
+        }
+
+        // CASO 4: track stuck — mismo URI y mismo progreso que el ciclo anterior
+        const uri = cur.item.uri;
+        const pos = cur.progress_ms || 0;
+        if (state.lastWatchdogUri === uri && state.lastWatchdogPos === pos && cur.is_playing) {
+          state.stuckCounter++;
+          if (state.stuckCounter >= WATCHDOG_STUCK_LIMIT) {
+            log(`🛡 Watchdog: track stuck (${(WATCHDOG_INTERVAL_MS * WATCHDOG_STUCK_LIMIT / 1000)}s sin avanzar), saltando…`, "warn");
+            state.stuckCounter = 0;
+            state.lastAutoResumeAt = Date.now();
+            await playNextRandom();
+            return;
+          }
+        } else {
+          state.stuckCounter = 0;
+        }
+        state.lastWatchdogUri = uri;
+        state.lastWatchdogPos = pos;
+
+        // CASO 5: track casi por terminar pero el evento end no se disparó.
+        // Programamos el avance con un timer corto.
+        const dur = cur.item.duration_ms || 0;
+        if (dur > 0 && (dur - pos) <= WATCHDOG_INTERVAL_MS && !state.advancingNext) {
+          state.advancingNext = true;
+          const wait = Math.max(0, dur - pos - 250);
+          setTimeout(async () => {
+            try {
+              const recheck = await api("/me/player");
+              // Si todavía suena la misma canción al final, fuerza siguiente
+              if (recheck && recheck.item && recheck.item.uri === uri) {
+                log("🛡 Watchdog: end-of-track, lanzando siguiente…");
+                await playNextRandom();
+              }
+            } catch (e) { /* ignorar */ }
+            state.advancingNext = false;
+          }, wait);
+        }
+      } catch (e) {
+        log("Watchdog error: " + (e.message || e), "warn");
+      }
+    }
+
+    function startPlaybackWatchdog() {
+      if (window._watchdogTimer) return;
+      window._watchdogTimer = setInterval(playbackWatchdog, WATCHDOG_INTERVAL_MS);
+      log(`🛡 Modo 24/7 activo — watchdog corriendo cada ${WATCHDOG_INTERVAL_MS / 1000}s`, "ok");
+      updateWatchdogPill();
+    }
+
+    function toggleWatchdog247() {
+      state.watchdog247 = !state.watchdog247;
+      log(state.watchdog247 ? "🛡 Modo 24/7 ACTIVADO" : "⚠ Modo 24/7 desactivado — la música puede pausarse", "warn");
+      updateWatchdogPill();
+    }
+
+    function updateWatchdogPill() {
+      const el = document.getElementById("watchdogPill");
+      if (!el) return;
+      if (state.watchdog247) {
+        el.textContent = "🛡 24/7";
+        el.style.borderColor = "#1ed760";
+        el.style.color = "#1ed760";
+        el.title = "Modo 24/7 activo — click para desactivar";
+      } else {
+        el.textContent = "⚠ 24/7 OFF";
+        el.style.borderColor = "#f5a524";
+        el.style.color = "#f5a524";
+        el.title = "Modo 24/7 desactivado — click para reactivar";
+      }
+    }
+
     function breakWatcher() {
       setInterval(async () => {
         updateCountdown();
@@ -2196,7 +2395,9 @@
         wireUI();
         updateShiftUI();
         updateCountdown();
+        updateWatchdogPill();
         breakWatcher();
+        startPlaybackWatchdog();   // arranca de una; el watchdog espera deviceId solo
         log("✓ Sesión iniciada. Cargando catálogo...", "ok");
         buildTrackPool();
         loadSpotifySDK();
