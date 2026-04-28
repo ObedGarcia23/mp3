@@ -5,6 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Turno Player — 24/7 + Pausas Ergonómicas</title>
+  <link rel="icon" type="image/png" href="./Logo.png" />
   <style>
     :root {
       --bg: #0b0f14;
@@ -376,45 +377,56 @@
     }
 
     @media(max-width: 900px) {
-      html, body {
+
+      html,
+      body {
         overflow-y: auto;
         height: auto;
         min-height: 100%;
       }
+
       .grid-2 {
         grid-template-columns: 1fr
       }
+
       .main-container {
         flex-direction: column;
         overflow-y: auto;
       }
+
       .sidebar {
         width: 100%;
         flex-shrink: 0;
         height: auto;
         min-height: 400px;
       }
+
       .wrap {
         padding: 12px;
         height: auto;
         min-height: 100%;
       }
+
       .main-content {
         overflow-y: visible;
         padding-right: 0;
       }
+
       .header {
         flex-direction: column;
         align-items: flex-start;
       }
+
       .now {
         flex-direction: column;
         text-align: center;
       }
+
       .controls {
         justify-content: center;
         flex-wrap: wrap;
       }
+
       .row {
         flex-direction: column;
       }
@@ -593,7 +605,10 @@
     <!-- ============ PANTALLA 1: SETUP ============ -->
     <div id="setupScreen" style="display:flex; align-items:center; justify-content:center; height:100%;">
       <div class="card" style="max-width: 420px; width: 100%; text-align: center; padding: 48px 32px;">
-        <div style="font-size: 48px; margin-bottom: 16px;">🎵</div>
+        <div style="margin-bottom: 16px;">
+          <img src="./Logo.png" alt="Turno Player Logo"
+            style="height: 80px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); object-fit: cover;" />
+        </div>
         <h1 style="font-size: 28px; margin-bottom: 8px;">Turno Player</h1>
         <p class="muted" style="margin-bottom: 32px;">Haz clic en el botón de abajo para conectarte con tu cuenta de
           Spotify Premium.</p>
@@ -612,7 +627,10 @@
     <div id="appScreen" class="hidden" style="display:flex; flex-direction:column; height:100%;">
 
       <div class="header">
-        <h1>🎵 Turno Player</h1>
+        <div style="display:flex; align-items:center; gap: 12px;">
+          <img src="./Logo.png" alt="Logo" style="height: 36px; border-radius: 8px; object-fit: cover;" />
+          <h1 style="margin: 0;">Turno Player</h1>
+        </div>
         <div class="status">
           <span class="pill" id="shiftPill">Turno: día</span>
           <span class="pill live" id="livePill">● conectado</span>
@@ -629,7 +647,7 @@
             <button class="btn secondary" style="padding:6px 12px; font-size:12px;" onclick="forcePoolRefresh()"
               title="Refrescar catálogo ahora con nuevos artistas">🔄 Nuevo lote</button>
           </div>
-          
+
           <!-- BUSCADOR -->
           <div style="display: flex; gap: 8px; margin-bottom: 12px;">
             <input type="text" id="searchInput" placeholder="Buscar canción o artista..." style="flex:1;" />
@@ -871,6 +889,7 @@
       wasPlayingBeforeBreak: false,
       userMarket: "US", // Default to US
       history: [],
+      playedThisShift: new Set(),
       isBuildingPool: false,
       nextPoolRefresh: 0, // timestamp del próximo refresh automático
     };
@@ -910,6 +929,8 @@
         nightEnd: state.nightEnd,
         volume: state.volume,
         artistIdCache: artistIdCache,
+        playedThisShift: [...state.playedThisShift],
+        lastShift: state.lastShift
       }));
     };
     const load = () => {
@@ -927,6 +948,8 @@
         if (d.nightEnd) state.nightEnd = d.nightEnd;
         if (typeof d.volume === "number") state.volume = d.volume;
         if (d.artistIdCache) artistIdCache = d.artistIdCache;
+        if (d.playedThisShift) state.playedThisShift = new Set(d.playedThisShift);
+        if (d.lastShift) state.lastShift = d.lastShift;
       } catch (e) { console.error(e) }
     };
 
@@ -1194,7 +1217,19 @@
 
         // Dedup
         const seen = new Set();
-        const unique = allTracks.filter(t => { if (seen.has(t.uri)) return false; seen.add(t.uri); return true; });
+        let unique = allTracks.filter(t => {
+          if (seen.has(t.uri)) return false;
+          if (state.playedThisShift.has(t.uri)) return false;
+          seen.add(t.uri);
+          return true;
+        });
+
+        if (unique.length === 0 && allTracks.length > 0) {
+          log("⚠️ Se agotaron las canciones únicas para este turno. Reiniciando historial del turno...", "warn");
+          state.playedThisShift.clear();
+          seen.clear();
+          unique = allTracks.filter(t => { if (seen.has(t.uri)) return false; seen.add(t.uri); return true; });
+        }
 
         // Shuffle final
         state.trackPool = unique.sort(() => Math.random() - 0.5);
@@ -1220,14 +1255,29 @@
       if (getCurrentShift() !== state.lastShift || !state.trackPool.length) {
         if (state.isBuildingPool) {
           toast("Construyendo catálogo... espera un momento", "warn");
-          return;
+          let tries = 0;
+          while (state.isBuildingPool && tries < 20) {
+            await sleep(500);
+            tries++;
+          }
+          if (!state.trackPool.length) {
+            setTimeout(playNextRandom, 5000);
+            return;
+          }
+        } else {
+          await buildTrackPool();
+          if (!state.trackPool.length) {
+            toast("No hay canciones disponibles", "error");
+            setTimeout(playNextRandom, 10000);
+            return;
+          }
         }
-        await buildTrackPool();
-        if (!state.trackPool.length) { toast("No hay canciones disponibles", "error"); return; }
       }
 
       const track = state.trackPool.shift();
-      if (state.trackPool.length < 5) {
+      state.playedThisShift.add(track.uri);
+      save(); // guardamos historial del turno
+      if (state.trackPool.length < 5 && !state.isBuildingPool) {
         buildTrackPool().catch(e => log(e.message, "err"));
       }
 
@@ -1250,6 +1300,8 @@
       } catch (e) {
         log("Error reproduciendo: " + e.message, "err");
         explainPlaybackError(e);
+        log("Saltando a la siguiente canción en 3 segundos...", "warn");
+        setTimeout(playNextRandom, 3000);
       }
     }
 
@@ -1286,6 +1338,8 @@
       if (!state.deviceId) { toast("Esperando conexión con Spotify...", "warn"); return; }
 
       const track = state.trackPool.splice(index, 1)[0];
+      state.playedThisShift.add(track.uri);
+      save(); // guardamos historial del turno
 
       if (state.currentTrack) {
         state.history.push({ uri: state.currentTrack.uri, name: state.currentTrack.name, artists: state.currentTrack.artists });
@@ -1380,7 +1434,7 @@
           const img = t.album.images?.[0]?.url;
           if (img) $("cover").style.backgroundImage = `url('${img}')`;
         }
-        
+
         // El SDK a veces dispara paused:true y position:0 mientras carga una nueva canción.
         // Usamos un debounce de 3 segundos basado en lastTrackChangeTime para no saltar accidentalmente.
         if (s.paused && s.position === 0 && s.track_window.previous_tracks.length > 0 && !state.breakInProgress) {
@@ -1479,29 +1533,45 @@
     }
 
     function playBreakAudio(file) {
-      return new Promise(resolve => {
+      return new Promise(async resolve => {
         if (file) {
-          const audio = new Audio(file);
-          audio.volume = 1.0;
-          audio.onended = () => { log("✓ Pausa terminada", "ok"); resolve(); };
-          audio.onerror = () => { log("Error reproduciendo MP3: " + file, "err"); resolve(); };
-          audio.play().catch(e => { log("No se pudo reproducir MP3: " + e.message, "err"); resolve(); });
+          try {
+            // Se usa fetch para eludir reglas estrictas de Hotlink/CORS que causan el error 403
+            const res = await fetch(file + "?v=" + Date.now(), { referrerPolicy: "no-referrer" });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+
+            const audio = new Audio(url);
+            audio.volume = 1.0;
+            audio.onended = () => { log("✓ Pausa terminada", "ok"); URL.revokeObjectURL(url); resolve(); };
+            audio.onerror = () => { log("Error interno reproduciendo MP3: " + file, "err"); URL.revokeObjectURL(url); resolve(); };
+            audio.play().catch(e => { log("No se pudo reproducir MP3: " + e.message, "err"); URL.revokeObjectURL(url); resolve(); });
+          } catch (e) {
+            log("Error descargando MP3 (403): " + e.message, "err");
+            // Fallback al sonido sintetizado si falla la descarga
+            playSynthesizedBeep(resolve);
+          }
         } else {
-          const ctx = new (window.AudioContext || window.webkitAudioContext)();
-          const play = (freq, when, dur) => {
-            const o = ctx.createOscillator();
-            const g = ctx.createGain();
-            o.frequency.value = freq;
-            o.connect(g); g.connect(ctx.destination);
-            g.gain.setValueAtTime(0, ctx.currentTime + when);
-            g.gain.linearRampToValueAtTime(0.25, ctx.currentTime + when + 0.05);
-            g.gain.linearRampToValueAtTime(0, ctx.currentTime + when + dur);
-            o.start(ctx.currentTime + when); o.stop(ctx.currentTime + when + dur);
-          };
-          play(880, 0, .3); play(1100, .4, .3); play(1320, .8, .5);
-          setTimeout(() => { ctx.close(); log("✓ Beep de aviso completado", "ok"); resolve(); }, 2000);
+          playSynthesizedBeep(resolve);
         }
       });
+    }
+
+    function playSynthesizedBeep(resolve) {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const play = (freq, when, dur) => {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.frequency.value = freq;
+        o.connect(g); g.connect(ctx.destination);
+        g.gain.setValueAtTime(0, ctx.currentTime + when);
+        g.gain.linearRampToValueAtTime(0.25, ctx.currentTime + when + 0.05);
+        g.gain.linearRampToValueAtTime(0, ctx.currentTime + when + dur);
+        o.start(ctx.currentTime + when); o.stop(ctx.currentTime + when + dur);
+      };
+      play(880, 0, .3); play(1100, .4, .3); play(1320, .8, .5);
+      setTimeout(() => { ctx.close(); log("✓ Beep de aviso completado", "ok"); resolve(); }, 2000);
     }
 
     async function triggerBreakNow() {
@@ -1522,6 +1592,8 @@
         if (shift !== state.lastShift && state.lastShift !== null) {
           log("🔄 Cambio de turno → " + shift.toUpperCase(), "warn");
           updateShiftUI();
+          state.playedThisShift.clear();
+          save();
           buildTrackPool();
         }
 
@@ -1568,7 +1640,7 @@
               artists: t.artists,
               album: t.album
             }));
-          
+
           if (tracks.length > 0) {
             state.trackPool = tracks;
             toast(`Mostrando ${tracks.length} resultados de búsqueda.`);
