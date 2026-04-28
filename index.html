@@ -953,6 +953,16 @@
                         <span class="muted" style="font-size:16px">🔊</span>
                         <input type="range" id="vol" min="0" max="100" value="70" />
                       </div>
+                      <div style="display:flex;align-items:center;gap:6px;margin-left:8px"
+                           title="Crossfade aproximado: fade-out al final de cada canción. El SDK web de Spotify no soporta crossfade real (overlap), pero el fade hace que la transición se sienta continua.">
+                        <span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">Fade</span>
+                        <select id="crossfadeSel" style="background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px">
+                          <option value="0">Off</option>
+                          <option value="4">4s</option>
+                          <option value="8" selected>8s</option>
+                          <option value="12">12s</option>
+                        </select>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1154,6 +1164,15 @@
         artists: ["Banda Blanca", "Kazzabe", "Silver Star", "Los Roland's", "Las Chicas Roland", "Grupo Kvrass"]
       },
       {
+        id: "raspe", label: "Raspe Catracho", nightSafe: true,
+        artists: [
+          "KBP", "Fresh Bodden", "D'Maleek", "Adonis",
+          "Pajek", "Mavihn", "Maravilla Crew", "Polache",
+          "Boykina", "Kaztro Worldwide", "Mongstr", "Niko Eme",
+          "Jojy Vega", "Lil Pucho"
+        ]
+      },
+      {
         id: "chillvibes", label: "Chill / Lo-fi (solo día)", nightSafe: false,
         artists: ["ODESZA", "Bonobo", "Tycho", "Rüfüs Du Sol", "Emancipator", "Nujabes", "Jinsang"]
       },
@@ -1220,6 +1239,12 @@
     const WATCHDOG_INTERVAL_MS = 5000;
     // Cuántos ciclos del watchdog sin avanzar = track stuck (5s * 3 = 15s)
     const WATCHDOG_STUCK_LIMIT = 3;
+    // Crossfade aproximado (fade-out últimos N segundos antes de saltar)
+    // 0 = sin crossfade. El SDK no soporta crossfade REAL — esto fade-outea
+    // la pista actual y arranca la siguiente al volumen normal.
+    state.crossfadeSec = 8;
+    state._fadeStartTimer = null;
+    state._fadeStepInterval = null;
 
     /* ---- Utilidades ---- */
     const $ = id => document.getElementById(id);
@@ -1254,7 +1279,8 @@
         volume: state.volume,
         artistIdCache: artistIdCache,
         playedThisShift: [...state.playedThisShift],
-        lastShift: state.lastShift
+        lastShift: state.lastShift,
+        crossfadeSec: state.crossfadeSec
       }));
     };
     const load = () => {
@@ -1274,6 +1300,7 @@
         if (d.artistIdCache) artistIdCache = d.artistIdCache;
         if (d.playedThisShift) state.playedThisShift = new Set(d.playedThisShift);
         if (d.lastShift) state.lastShift = d.lastShift;
+        if (typeof d.crossfadeSec === "number") state.crossfadeSec = d.crossfadeSec;
       } catch (e) { console.error(e) }
     };
 
@@ -1475,7 +1502,7 @@
         const market = state.userMarket || "from_token";
         const data = await api(`/artists/${id}/top-tracks?market=${market}`);
         return (data.tracks || []).filter(t => t && t.uri && !t.uri.includes("local"))
-          .map(t => ({ uri: t.uri, name: t.name, artists: t.artists, album: t.album }));
+          .map(t => ({ uri: t.uri, name: t.name, artists: t.artists, album: t.album, duration_ms: t.duration_ms }));
       } catch (e) {
         const n = typeof artistOrName === "object" ? artistOrName.n : artistOrName;
         log("Top tracks falló: " + n + " → " + e.message, "warn");
@@ -1525,7 +1552,8 @@
                   uri: t.uri,
                   name: t.name,
                   artists: t.artists,
-                  album: t.album
+                  album: t.album,
+                  duration_ms: t.duration_ms
                 }));
               allTracks.push(...tracks);
             }
@@ -1613,6 +1641,7 @@
 
       try {
         state.lastTrackChangeTime = Date.now();
+        cancelCrossfade();                          // matar fade de la pista anterior
         await playWithRetry(track.uri);
         log("▶ " + track.name + " — " + track.artists.map(a => a.name).join(", "));
 
@@ -1621,6 +1650,7 @@
         api("/me/player/repeat?state=off", { method: "PUT" }).catch(() => { });
 
         renderPool();
+        scheduleCrossfade(track);                   // programa el fade-out de esta pista
       } catch (e) {
         log("Error reproduciendo: " + e.message, "err");
         explainPlaybackError(e);
@@ -1629,25 +1659,144 @@
       }
     }
 
+    /* ==========================================================
+       Crossfade aproximado
+       El Spotify Web Playback SDK no soporta crossfade real
+       (un solo stream de audio). Lo simulamos con un fade-out
+       de N segundos al final de cada track. Cuando arranca la
+       siguiente, restauramos el volumen instantáneamente.
+       ========================================================== */
+    function cancelCrossfade() {
+      if (state._fadeStartTimer) { clearTimeout(state._fadeStartTimer); state._fadeStartTimer = null; }
+      if (state._fadeStepInterval) { clearInterval(state._fadeStepInterval); state._fadeStepInterval = null; }
+      // Restaurar volumen sin esperar — la próxima canción debe arrancar al volumen normal
+      try { state.player?.setVolume(state.volume); } catch (_) { }
+    }
+
+    function scheduleCrossfade(track) {
+      cancelCrossfade();
+      const sec = Number(state.crossfadeSec) || 0;
+      if (sec <= 0) return;                             // crossfade desactivado
+      const dur = Number(track?.duration_ms) || 0;
+      if (dur < (sec + 4) * 1000) return;               // pista muy corta — no fundir
+
+      // El watchdog/avance ya programa el siguiente. Acá solo bajamos el volumen.
+      const startInMs = Math.max(0, dur - sec * 1000);
+      state._fadeStartTimer = setTimeout(() => {
+        const target = (state.volume || 0.7) * 0.05;    // baja hasta 5% del volumen actual
+        const startVol = state.volume || 0.7;
+        const stepMs = 120;
+        const totalSteps = Math.max(1, Math.floor((sec * 1000) / stepMs));
+        let step = 0;
+        state._fadeStepInterval = setInterval(() => {
+          step++;
+          const progress = Math.min(1, step / totalSteps);
+          // curva ease-out cuadrática para que el fade no sea lineal
+          const v = startVol - (startVol - target) * (1 - Math.pow(1 - progress, 2));
+          try { state.player?.setVolume(Math.max(target, v)); } catch (_) { }
+          if (step >= totalSteps) {
+            clearInterval(state._fadeStepInterval);
+            state._fadeStepInterval = null;
+          }
+        }, stepMs);
+      }, startInMs);
+    }
+
     /* Helper: intenta reproducir, si falla por device inactivo o 403 reintenta
-       transfiriendo el playback al device de la app. */
+       transfiriendo el playback al device de la app. Si el device no existe
+       (404 "Device not found"), re-descubre o recrea el device.
+    */
     async function playWithRetry(uri) {
-      const body = JSON.stringify({ uris: [uri] });
+      const buildBody = () => JSON.stringify({ uris: [uri] });
+
+      // Si el device_id está vacío, primero conseguir uno
+      if (!state.deviceId) {
+        const id = await findOrRecreateDevice();
+        if (!id) throw new Error("Sin device disponible. Recargá la pestaña.");
+        state.deviceId = id;
+        try { await transferPlaybackHere(true); } catch (_) { }
+        await sleep(800);
+      }
+
       try {
-        await api(`/me/player/play?device_id=${state.deviceId}`, { method: "PUT", body });
+        await api(`/me/player/play?device_id=${state.deviceId}`, { method: "PUT", body: buildBody() });
         return;
       } catch (e) {
-        const msg = e.message || "";
-        // 404 = NO_ACTIVE_DEVICE  ·  403 = device en standby  ·  502 = transient
-        if (msg.includes("404") || msg.includes("NO_ACTIVE_DEVICE") || msg.includes("403") || msg.includes("502")) {
-          log("Device inactivo. Activando 'Turno Player 24/7'…", "warn");
-          await transferPlaybackHere(true);
-          await sleep(800);
-          await api(`/me/player/play?device_id=${state.deviceId}`, { method: "PUT", body });
-          return;
+        const msg = (e.message || "").toString();
+        const is404 = msg.includes("404") || msg.includes("Device not found") || msg.includes("NO_ACTIVE_DEVICE");
+        const is403 = msg.includes("403");
+        const is502 = msg.includes("502") || msg.includes("503");
+
+        if (!(is404 || is403 || is502)) throw e;
+
+        log(`Device problem (${msg.slice(0, 80)}…). Re-descubriendo device…`, "warn");
+
+        // 1) Buscar nuestro device por nombre — quizás Spotify le asignó otro id
+        const newId = await findOrRecreateDevice();
+        if (!newId) {
+          throw new Error("No pude recuperar el device de Turno Player. Recargá la pestaña.");
         }
-        throw e;
+        state.deviceId = newId;
+
+        // 2) Transferir playback al device recuperado
+        try { await transferPlaybackHere(true); } catch (_) { }
+        await sleep(900);
+
+        // 3) Retry final
+        await api(`/me/player/play?device_id=${state.deviceId}`, { method: "PUT", body: buildBody() });
       }
+    }
+
+    /* Busca el device "Turno Player 24/7" en la lista de devices del usuario.
+       Si no aparece, fuerza un disconnect+connect del SDK y espera por el
+       nuevo device_id que llegue por el listener "ready". */
+    async function findOrRecreateDevice() {
+      // 1) Listar devices actuales
+      try {
+        const data = await api("/me/player/devices");
+        const devices = data?.devices || [];
+        const ours = devices.find(d => d.name === "Turno Player 24/7");
+        if (ours && ours.id) {
+          if (ours.id !== state.deviceId) {
+            log(`✓ Device id actualizado: ${ours.id.slice(0, 12)}…`, "ok");
+          }
+          return ours.id;
+        }
+        log("⚠ Nuestro device no aparece en la lista. Reconectando SDK…", "warn");
+      } catch (e) {
+        log("No pude listar devices: " + e.message, "warn");
+      }
+
+      // 2) Reconectar SDK forzadamente
+      try {
+        if (state.player) {
+          try { state.player.disconnect(); } catch (_) { }
+          await sleep(300);
+          await state.player.connect();
+        } else {
+          // Si por algo no había player, recargá la SDK
+          loadSpotifySDK();
+        }
+      } catch (e) {
+        log("Reconexión SDK falló: " + e.message, "err");
+      }
+
+      // 3) Esperar hasta 8 segundos a que dispare el listener "ready" con un nuevo device_id
+      const startedAt = Date.now();
+      const oldId = state.deviceId;
+      while (Date.now() - startedAt < 8000) {
+        await sleep(400);
+        if (state.deviceId && state.deviceId !== oldId) return state.deviceId;
+      }
+
+      // 4) Último intento: re-listar devices
+      try {
+        const data2 = await api("/me/player/devices");
+        const ours2 = (data2?.devices || []).find(d => d.name === "Turno Player 24/7");
+        if (ours2?.id) return ours2.id;
+      } catch (_) { }
+
+      return null;
     }
 
     function explainPlaybackError(e) {
@@ -1672,11 +1821,13 @@
 
       try {
         state.lastTrackChangeTime = Date.now();
+        cancelCrossfade();
         await playWithRetry(track.uri);
         log("▶ " + track.name + " — " + track.artists.map(a => a.name).join(", "));
         api("/me/player/shuffle?state=false", { method: "PUT" }).catch(() => { });
         api("/me/player/repeat?state=off", { method: "PUT" }).catch(() => { });
         renderPool();
+        scheduleCrossfade(track);
       } catch (e) {
         log("Error reproduciendo: " + e.message, "err");
         explainPlaybackError(e);
@@ -1703,14 +1854,31 @@
     }
 
     async function transferPlaybackHere(forcePlay = false) {
-      try {
+      const doTransfer = async (id) => {
         await api("/me/player", {
           method: "PUT",
-          body: JSON.stringify({ device_ids: [state.deviceId], play: !!forcePlay })
+          body: JSON.stringify({ device_ids: [id], play: !!forcePlay })
         });
-        // Esperamos a que Spotify procese el cambio de device
         await sleep(700);
-      } catch (e) { log("Transfer: " + e.message, "warn") }
+      };
+      try {
+        if (!state.deviceId) throw new Error("No device id");
+        await doTransfer(state.deviceId);
+      } catch (e) {
+        const msg = (e.message || "").toString();
+        if (msg.includes("404") || msg.includes("Device not found") || !state.deviceId) {
+          log("Transfer 404 — re-descubriendo device…", "warn");
+          const newId = await findOrRecreateDevice();
+          if (newId) {
+            state.deviceId = newId;
+            try { await doTransfer(newId); } catch (e2) { log("Transfer retry: " + e2.message, "warn"); }
+          } else {
+            log("No se pudo recuperar el device tras re-descubrir", "err");
+          }
+        } else {
+          log("Transfer: " + msg, "warn");
+        }
+      }
     }
 
     /* ==========================================================
@@ -2236,7 +2404,8 @@
               uri: t.uri,
               name: t.name,
               artists: t.artists,
-              album: t.album
+              album: t.album,
+              duration_ms: t.duration_ms
             }));
 
           if (tracks.length > 0) {
@@ -2354,6 +2523,18 @@
         save();
       };
       $("vol").value = state.volume * 100;
+
+      // Crossfade selector
+      const cfSel = document.getElementById("crossfadeSel");
+      if (cfSel) {
+        cfSel.value = String(state.crossfadeSec ?? 8);
+        cfSel.onchange = (e) => {
+          state.crossfadeSec = Number(e.target.value) || 0;
+          save();
+          if (state.crossfadeSec === 0) cancelCrossfade();
+          log(state.crossfadeSec === 0 ? "Crossfade desactivado" : `Crossfade: ${state.crossfadeSec}s`, "ok");
+        };
+      }
 
       $("nightStart").value = state.nightStart;
       $("nightEnd").value = state.nightEnd;
