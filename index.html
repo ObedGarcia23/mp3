@@ -3,7 +3,12 @@
 
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Turno Player" />
+  <meta name="theme-color" content="#0b0f14" />
   <title>Turno Player — 24/7 + Pausas Ergonómicas</title>
   <link rel="icon" type="image/png" href="./Logo.png" />
   <style>
@@ -376,60 +381,300 @@
       padding-right: 8px;
     }
 
-    @media(max-width: 900px) {
+    /* =====================================================
+       BOTTOM NAV — solo móvil
+       ===================================================== */
+    .bottom-nav {
+      display: none;
+    }
 
-      html,
+    /* =====================================================
+       MOBILE RESPONSIVE (≤ 768px) — Native App Feel
+       ===================================================== */
+    @media (max-width: 768px) {
+      html, body {
+        overflow: hidden;
+        height: 100%;
+        height: 100dvh;
+      }
+
       body {
-        overflow-y: auto;
-        height: auto;
-        min-height: 100%;
-      }
-
-      .grid-2 {
-        grid-template-columns: 1fr
-      }
-
-      .main-container {
         flex-direction: column;
-        overflow-y: auto;
-      }
-
-      .sidebar {
-        width: 100%;
-        flex-shrink: 0;
-        height: auto;
-        min-height: 400px;
       }
 
       .wrap {
-        padding: 12px;
-        height: auto;
-        min-height: 100%;
-      }
-
-      .main-content {
-        overflow-y: visible;
-        padding-right: 0;
-      }
-
-      .header {
+        padding: 0;
+        height: 100%;
+        height: 100dvh;
+        display: flex;
         flex-direction: column;
-        align-items: flex-start;
+        overflow: hidden;
       }
 
+      /* ----- Header móvil compacto ----- */
+      .header {
+        padding: 12px 16px 10px;
+        margin-bottom: 0;
+        background: rgba(11,15,20,0.95);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border-bottom: 1px solid var(--line);
+        flex-wrap: nowrap;
+        gap: 8px;
+        position: sticky;
+        top: 0;
+        z-index: 50;
+        flex-shrink: 0;
+      }
+
+      .header h1 {
+        font-size: 18px;
+      }
+
+      .header img {
+        height: 28px !important;
+      }
+
+      .header .status {
+        gap: 6px;
+      }
+
+      .header .status .pill {
+        font-size: 10px;
+        padding: 2px 7px;
+      }
+
+      /* ----- Layout principal: tabs ----- */
+      .main-container {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        display: block;
+        position: relative;
+      }
+
+      /* Cada "tab panel" ocupa toda el área */
+      .tab-panel {
+        display: none;
+        position: absolute;
+        inset: 0;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        padding: 16px 14px;
+        padding-bottom: 100px;
+      }
+
+      .tab-panel.active {
+        display: block;
+      }
+
+      /* ----- Sidebar = tab panel Catálogo ----- */
+      .sidebar {
+        width: 100%;
+        height: 100%;
+        border-radius: 0;
+        border: none;
+        background: transparent;
+        backdrop-filter: none;
+        box-shadow: none;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .pool-list {
+        flex: 1;
+        max-height: none;
+        border-radius: 12px;
+      }
+
+      /* ----- Main content = tab panel Player ----- */
+      .main-content {
+        padding: 0;
+        overflow-y: visible;
+        gap: 14px;
+      }
+
+      /* ----- Cards móvil ----- */
+      .card {
+        border-radius: 14px;
+        padding: 18px;
+        min-width: unset;
+      }
+
+      /* ----- Player card grande ----- */
       .now {
         flex-direction: column;
+        align-items: center;
         text-align: center;
+        gap: 16px;
+      }
+
+      .cover {
+        width: 140px;
+        height: 140px;
+        border-radius: 14px;
+        box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+      }
+
+      .track {
+        width: 100%;
+      }
+
+      .track .title {
+        font-size: 18px;
       }
 
       .controls {
         justify-content: center;
-        flex-wrap: wrap;
+        margin-top: 18px;
+        gap: 14px;
+      }
+
+      .btn.icon {
+        width: 52px;
+        height: 52px;
+        font-size: 20px;
+      }
+
+      .btn.icon.big {
+        width: 66px;
+        height: 66px;
+        font-size: 26px;
+      }
+
+      .vol {
+        width: 100%;
+        max-width: 240px;
+        margin: 12px auto 0;
+      }
+
+      /* volumen debajo de controles */
+      .controls-wrap {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        width: 100%;
+      }
+
+      /* ----- Countdown ----- */
+      .countdown {
+        font-size: 44px;
+      }
+
+      /* ----- Grid → 1 columna ----- */
+      .grid-2 {
+        grid-template-columns: 1fr;
+        gap: 14px;
       }
 
       .row {
         flex-direction: column;
+        gap: 14px;
       }
+
+      /* ----- Log ----- */
+      .log {
+        max-height: 120px;
+        font-size: 11px;
+      }
+
+      /* ----- Bottom navigation bar ----- */
+      .bottom-nav {
+        display: flex;
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: rgba(10,14,19,0.97);
+        backdrop-filter: blur(24px);
+        -webkit-backdrop-filter: blur(24px);
+        border-top: 1px solid var(--line);
+        padding: 8px 0;
+        padding-bottom: calc(8px + env(safe-area-inset-bottom));
+        z-index: 100;
+        justify-content: space-around;
+        align-items: center;
+      }
+
+      .bottom-nav-btn {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 3px;
+        background: none;
+        border: none;
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 600;
+        cursor: pointer;
+        padding: 6px 16px;
+        border-radius: 12px;
+        transition: color .2s;
+        -webkit-tap-highlight-color: transparent;
+        letter-spacing: 0.3px;
+      }
+
+      .bottom-nav-btn .nav-icon {
+        font-size: 22px;
+        line-height: 1;
+        transition: transform .2s;
+      }
+
+      .bottom-nav-btn.active {
+        color: var(--accent);
+      }
+
+      .bottom-nav-btn.active .nav-icon {
+        transform: scale(1.15);
+      }
+
+      /* ----- Toast móvil ----- */
+      .toast {
+        top: auto;
+        bottom: calc(72px + env(safe-area-inset-bottom));
+        right: 12px;
+        left: 12px;
+        max-width: unset;
+        font-size: 13px;
+      }
+
+      /* ----- Inputs táctiles más grandes ----- */
+      input[type="text"],
+      input[type="time"],
+      input[type="password"],
+      select,
+      textarea {
+        font-size: 16px; /* evita zoom en iOS */
+        padding: 11px 14px;
+        min-height: 44px;
+      }
+
+      .btn {
+        min-height: 44px;
+      }
+
+      /* ----- Setup screen ----- */
+      #setupScreen > .card {
+        margin: 16px;
+        padding: 36px 24px !important;
+      }
+
+      /* ----- Scrollbar oculto en móvil ----- */
+      .tab-panel::-webkit-scrollbar { display: none; }
+      .tab-panel { scrollbar-width: none; }
+    }
+
+    /* ===== Tablet (769–900px) ===== */
+    @media (min-width: 769px) and (max-width: 900px) {
+      html, body { overflow-y: auto; height: auto; min-height: 100%; }
+      .grid-2 { grid-template-columns: 1fr; }
+      .main-container { flex-direction: column; overflow-y: auto; }
+      .sidebar { width: 100%; height: auto; min-height: 360px; }
+      .wrap { padding: 14px; height: auto; min-height: 100%; }
+      .main-content { overflow-y: visible; padding-right: 0; }
+      .header { flex-direction: row; align-items: center; }
+      .row { flex-direction: column; }
     }
 
     .hidden {
@@ -640,139 +885,168 @@
       </div>
 
       <div class="main-container">
-        <!-- SIDEBAR: Track Pool -->
-        <div class="card sidebar">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-            <h2 style="margin:0;">Catálogo (<span id="poolCount">0</span>)</h2>
-            <button class="btn secondary" style="padding:6px 12px; font-size:12px;" onclick="forcePoolRefresh()"
-              title="Refrescar catálogo ahora con nuevos artistas">🔄 Nuevo lote</button>
-          </div>
+        <!-- SIDEBAR: Track Pool — Tab: Catálogo -->
+        <div class="tab-panel active" id="tab-catalogo">
+          <div class="card sidebar">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+              <h2 style="margin:0;">Catálogo (<span id="poolCount">0</span>)</h2>
+              <button class="btn secondary" style="padding:6px 12px; font-size:12px;" onclick="forcePoolRefresh()"
+                title="Refrescar catálogo ahora con nuevos artistas">🔄 Nuevo lote</button>
+            </div>
 
-          <!-- BUSCADOR -->
-          <div style="display: flex; gap: 8px; margin-bottom: 12px;">
-            <input type="text" id="searchInput" placeholder="Buscar canción o artista..." style="flex:1;" />
-            <button class="btn" id="searchBtn" style="padding: 8px 12px;">🔍</button>
-          </div>
+            <!-- BUSCADOR -->
+            <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+              <input type="text" id="searchInput" placeholder="Buscar canción o artista..." style="flex:1;" />
+              <button class="btn" id="searchBtn" style="padding: 8px 12px;">🔍</button>
+            </div>
 
-          <p class="muted" style="margin-top:0; margin-bottom:6px;">Click en una canción para reproducirla. El catálogo
-            se renueva cada 2h con artistas nuevos.</p>
-          <p class="muted" id="nextRefreshLabel"
-            style="margin-top:0; margin-bottom:12px; font-size:11px; color: var(--accent-2);">—</p>
-          <div class="pool-list" id="poolList" style="flex:1;">
-            <p class="muted" style="text-align:center;padding:20px;">Esperando canciones...</p>
+            <p class="muted" style="margin-top:0; margin-bottom:6px;">Click en una canción para reproducirla. El catálogo
+              se renueva cada 2h con artistas nuevos.</p>
+            <p class="muted" id="nextRefreshLabel"
+              style="margin-top:0; margin-bottom:12px; font-size:11px; color: var(--accent-2);">—</p>
+            <div class="pool-list" id="poolList" style="flex:1;">
+              <p class="muted" style="text-align:center;padding:20px;">Esperando canciones...</p>
+            </div>
           </div>
         </div>
 
-        <!-- MAIN CONTENT -->
-        <div class="main-content">
-          <div class="row">
-            <!-- Now playing -->
-            <div class="card" style="flex:2;min-width:340px">
-              <h2>Reproduciendo ahora</h2>
-              <div class="now">
-                <div class="cover" id="cover"></div>
-                <div class="track">
-                  <div class="title" id="trackTitle">—</div>
-                  <div class="artist" id="trackArtist">Presiona ▶ para empezar</div>
-                  <div class="controls">
-                    <button class="btn icon" id="prevBtn" title="Anterior">⏮</button>
-                    <button class="btn icon big" id="playBtn" title="Play/Pause">▶</button>
-                    <button class="btn icon" id="nextBtn" title="Siguiente (aleatoria)">⏭</button>
-                    <div class="vol" style="margin-left:12px;flex:1;max-width:180px">
-                      <span class="muted" style="font-size:16px">🔊</span>
-                      <input type="range" id="vol" min="0" max="100" value="70" />
+        <!-- MAIN CONTENT — Tab: Player -->
+        <div class="tab-panel" id="tab-player">
+          <div class="main-content">
+            <div class="row">
+              <!-- Now playing -->
+              <div class="card" style="flex:2;min-width:340px">
+                <h2>Reproduciendo ahora</h2>
+                <div class="now">
+                  <div class="cover" id="cover"></div>
+                  <div class="track">
+                    <div class="title" id="trackTitle">—</div>
+                    <div class="artist" id="trackArtist">Presiona ▶ para empezar</div>
+                    <div class="controls">
+                      <button class="btn icon" id="prevBtn" title="Anterior">⏮</button>
+                      <button class="btn icon big" id="playBtn" title="Play/Pause">▶</button>
+                      <button class="btn icon" id="nextBtn" title="Siguiente (aleatoria)">⏭</button>
+                      <div class="vol" style="margin-left:12px;flex:1;max-width:180px">
+                        <span class="muted" style="font-size:16px">🔊</span>
+                        <input type="range" id="vol" min="0" max="100" value="70" />
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
+
+              <!-- Next break countdown -->
+              <div class="card" style="flex:1;min-width:260px">
+                <h2>Próxima pausa ergonómica</h2>
+                <div class="countdown" id="countdown">--:--:--</div>
+                <p class="muted" style="text-align:center;margin:8px 0 0" id="nextBreakLabel">—</p>
+                <button class="btn secondary" style="width:100%;margin-top:12px" onclick="triggerBreakNow()">Ejecutar
+                  pausa ahora</button>
+              </div>
             </div>
 
-            <!-- Next break countdown -->
-            <div class="card" style="flex:1;min-width:260px">
-              <h2>Próxima pausa ergonómica</h2>
-              <div class="countdown" id="countdown">--:--:--</div>
-              <p class="muted" style="text-align:center;margin:8px 0 0" id="nextBreakLabel">—</p>
-              <button class="btn secondary" style="width:100%;margin-top:12px" onclick="triggerBreakNow()">Ejecutar
-                pausa ahora</button>
-            </div>
-          </div>
-
-          <div class="grid-2">
-            <!-- Ergonomic schedule (3 Exercises) -->
+            <!-- System Log -->
             <div class="card">
-              <h2>Pausas Ergonómicas (Ejercicios)</h2>
-              <p class="muted">Configura a qué hora quieres que suene cada ejercicio. Cada horario programado sonará a
-                esa hora y automáticamente se repetirá 12 horas después (ciclo AM/PM).</p>
-
-              <div style="margin-top: 14px;">
-                <label>Ejercicio 1 (reproduce ./Ejercicio1.mp3)</label>
-                <div style="display:flex;gap:8px;align-items:center;">
-                  <input type="time" id="ex1Time" style="flex:1" />
-                  <button class="btn secondary" onclick="testExercise(1)" style="padding: 6px 12px; font-size: 13px;">🔊
-                    Probar</button>
-                </div>
-              </div>
-
-              <div style="margin-top: 14px;">
-                <label>Ejercicio 2 (reproduce ./Ejercicio2.mp3)</label>
-                <div style="display:flex;gap:8px;align-items:center;">
-                  <input type="time" id="ex2Time" style="flex:1" />
-                  <button class="btn secondary" onclick="testExercise(2)" style="padding: 6px 12px; font-size: 13px;">🔊
-                    Probar</button>
-                </div>
-              </div>
-
-              <div style="margin-top: 14px;">
-                <label>Ejercicio 3 (reproduce ./Ejercicio3.mp3)</label>
-                <div style="display:flex;gap:8px;align-items:center;">
-                  <input type="time" id="ex3Time" style="flex:1" />
-                  <button class="btn secondary" onclick="testExercise(3)" style="padding: 6px 12px; font-size: 13px;">🔊
-                    Probar</button>
-                </div>
-              </div>
-
-              <p class="muted" style="margin-top:14px; font-size: 12px; line-height: 1.5;">Asegúrate de subir los
-                archivos <b>Ejercicio1.mp3</b>, <b>Ejercicio2.mp3</b> y <b>Ejercicio3.mp3</b> al mismo servidor donde
-                está alojado este sistema.</p>
-            </div>
-
-            <!-- Genres and config -->
-            <div class="card">
-              <h2>Géneros activos</h2>
-              <p class="muted">Selecciona los géneros de los que sacar canciones aleatorias. En turno de noche
-                (19:00–07:00) se filtran automáticamente los géneros más lentos.</p>
-              <div class="genres" id="genresList"></div>
-
-              <h2 style="margin-top:20px">Turno de noche</h2>
-              <div class="row" style="gap:10px;margin-top:6px">
-                <div style="flex:1;min-width:120px">
-                  <label>Inicio</label>
-                  <input type="time" id="nightStart" value="19:00" />
-                </div>
-                <div style="flex:1;min-width:120px">
-                  <label>Fin</label>
-                  <input type="time" id="nightEnd" value="07:00" />
-                </div>
-              </div>
-              <p class="muted" style="margin-top:8px">De noche solo sonarán géneros de alta energía: Reggaetón, EDM,
-                Dance Pop y Rock movido. No habrá baladas ni lo-fi.</p>
+              <h2>Registro del sistema</h2>
+              <div class="log" id="log"></div>
             </div>
           </div>
-
-          <!-- System Log -->
-          <div class="card">
-            <h2>Registro del sistema</h2>
-            <div class="log" id="log"></div>
-          </div>
-
         </div>
-      </div>
+
+        <!-- CONFIG — Tab: Configuración -->
+        <div class="tab-panel" id="tab-config">
+          <div class="main-content">
+            <div class="grid-2">
+              <!-- Ergonomic schedule (3 Exercises) -->
+              <div class="card">
+                <h2>Pausas Ergonómicas (Ejercicios)</h2>
+                <p class="muted">Configura a qué hora quieres que suene cada ejercicio. Cada horario programado sonará a
+                  esa hora y automáticamente se repetirá 12 horas después (ciclo AM/PM).</p>
+
+                <div style="margin-top: 14px;">
+                  <label>Ejercicio 1</label>
+                  <div style="display:flex;gap:8px;align-items:center;">
+                    <input type="time" id="ex1Time" style="flex:1" />
+                    <button class="btn secondary" onclick="testExercise(1)" style="padding: 6px 12px; font-size: 13px;">🔊
+                      Probar</button>
+                  </div>
+                </div>
+
+                <div style="margin-top: 14px;">
+                  <label>Ejercicio 2</label>
+                  <div style="display:flex;gap:8px;align-items:center;">
+                    <input type="time" id="ex2Time" style="flex:1" />
+                    <button class="btn secondary" onclick="testExercise(2)" style="padding: 6px 12px; font-size: 13px;">🔊
+                      Probar</button>
+                  </div>
+                </div>
+
+                <div style="margin-top: 14px;">
+                  <label>Ejercicio 3</label>
+                  <div style="display:flex;gap:8px;align-items:center;">
+                    <input type="time" id="ex3Time" style="flex:1" />
+                    <button class="btn secondary" onclick="testExercise(3)" style="padding: 6px 12px; font-size: 13px;">🔊
+                      Probar</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Genres and config -->
+              <div class="card">
+                <h2>Géneros activos</h2>
+                <p class="muted">Selecciona los géneros de los que sacar canciones aleatorias. En turno de noche
+                  (19:00–07:00) se filtran automáticamente los géneros más lentos.</p>
+                <div class="genres" id="genresList"></div>
+
+                <h2 style="margin-top:20px">Turno de noche</h2>
+                <div class="row" style="gap:10px;margin-top:6px">
+                  <div style="flex:1;min-width:120px">
+                    <label>Inicio</label>
+                    <input type="time" id="nightStart" value="19:00" />
+                  </div>
+                  <div style="flex:1;min-width:120px">
+                    <label>Fin</label>
+                    <input type="time" id="nightEnd" value="07:00" />
+                  </div>
+                </div>
+                <p class="muted" style="margin-top:8px">De noche solo sonarán géneros de alta energía: Reggaetón, EDM,
+                  Dance Pop y Rock movido. No habrá baladas ni lo-fi.</p>
+              </div>
+            </div>
+          </div>
+        </div>
 
     </div>
   </div>
 
+  <!-- Bottom Navigation Bar (sólo visible en móvil) -->
+  <nav class="bottom-nav" id="bottomNav">
+    <button class="bottom-nav-btn active" id="nav-catalogo" onclick="switchTab('catalogo')">
+      <span class="nav-icon">🎵</span>
+      Catálogo
+    </button>
+    <button class="bottom-nav-btn" id="nav-player" onclick="switchTab('player')">
+      <span class="nav-icon">▶️</span>
+      Player
+    </button>
+    <button class="bottom-nav-btn" id="nav-config" onclick="switchTab('config')">
+      <span class="nav-icon">⚙️</span>
+      Config
+    </button>
+  </nav>
+
   <!-- Spotify Web Playback SDK -->
   <script>
+    /* ---- Navegación por tabs (solo móvil) ---- */
+    function switchTab(tab) {
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.bottom-nav-btn').forEach(b => b.classList.remove('active'));
+      const panel = document.getElementById('tab-' + tab);
+      const btn = document.getElementById('nav-' + tab);
+      if (panel) panel.classList.add('active');
+      if (btn) btn.classList.add('active');
+    }
+
     function loadSpotifySDK() {
       const script = document.createElement("script");
       script.src = "https://sdk.scdn.co/spotify-player.js";
@@ -1542,76 +1816,110 @@
 
     /* ==========================================================
        Audio sintetizado para pausas ergonómicas
-       100% generado en el navegador — sin ninguna petición de red.
-       Cada ejercicio tiene un patrón de tonos distinto y reconocible.
+       100% local — CERO peticiones de red.
+
+       PROBLEMA RESUELTO: Los navegadores modernos (Chrome, Edge, Safari)
+       bloquean el AudioContext si no fue iniciado por un gesto del usuario.
+       Cuando el break se dispara automáticamente por el timer, el
+       AudioContext arranca "suspended" y no suena nada.
+
+       SOLUCIÓN: Mantenemos un AudioContext global que se "desbloquea"
+       en el primer click del usuario, y SIEMPRE llamamos ctx.resume()
+       antes de reproducir cualquier tono.
        ========================================================== */
+
+    let _audioCtx = null;
+
+    function getAudioContext() {
+      if (!_audioCtx || _audioCtx.state === 'closed') {
+        _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      return _audioCtx;
+    }
+
+    // Desbloquear el AudioContext en el primer gesto del usuario
+    // (necesario para que funcione el autoplay automático en Chrome/Edge)
+    function unlockAudio() {
+      const ctx = getAudioContext();
+      if (ctx.state === 'suspended') {
+        ctx.resume().then(() => log('✓ Audio desbloqueado por interacción del usuario', 'ok'));
+      }
+    }
+    document.addEventListener('click', unlockAudio, { once: false });
+    document.addEventListener('touchstart', unlockAudio, { once: false });
+    document.addEventListener('keydown', unlockAudio, { once: false });
+
     function playExerciseAudio(exerciseId) {
       return new Promise(resolve => {
         try {
-          const ctx = new (window.AudioContext || window.webkitAudioContext)();
-          const master = ctx.createGain();
-          master.gain.value = 0.55;
-          master.connect(ctx.destination);
+          const ctx = getAudioContext();
 
-          // Helper: tono simple con envelope ADSR
-          const tone = (freq, when, dur, vol = 0.7, type = 'sine') => {
-            const o = ctx.createOscillator();
-            const g = ctx.createGain();
-            o.type = type;
-            o.frequency.value = freq;
-            o.connect(g); g.connect(master);
-            const t = ctx.currentTime + when;
-            g.gain.setValueAtTime(0, t);
-            g.gain.linearRampToValueAtTime(vol, t + 0.04);
-            g.gain.setValueAtTime(vol, t + dur - 0.08);
-            g.gain.linearRampToValueAtTime(0, t + dur);
-            o.start(t); o.stop(t + dur);
+          // SIEMPRE reanudar antes de tocar — esto es lo que faltaba
+          const doPlay = () => {
+            const master = ctx.createGain();
+            master.gain.value = 0.6;
+            master.connect(ctx.destination);
+
+            const tone = (freq, when, dur, vol = 0.7, type = 'sine') => {
+              const o = ctx.createOscillator();
+              const g = ctx.createGain();
+              o.type = type;
+              o.frequency.value = freq;
+              o.connect(g); g.connect(master);
+              const t = ctx.currentTime + when;
+              g.gain.setValueAtTime(0, t);
+              g.gain.linearRampToValueAtTime(vol, t + 0.04);
+              g.gain.setValueAtTime(vol, t + dur - 0.08);
+              g.gain.linearRampToValueAtTime(0, t + dur);
+              o.start(t); o.stop(t + dur);
+            };
+
+            let totalDuration = 3;
+
+            if (exerciseId === 1) {
+              tone(523, 0.0,  0.35, 0.8);
+              tone(659, 0.4,  0.35, 0.8);
+              tone(784, 0.8,  0.35, 0.8);
+              tone(1047, 1.2, 0.6,  0.9);
+              tone(523, 2.0,  0.15, 0.5);
+              tone(659, 2.2,  0.15, 0.5);
+              tone(784, 2.4,  0.15, 0.5);
+              tone(1047, 2.6, 0.5,  0.9);
+              totalDuration = 3.4;
+            } else if (exerciseId === 2) {
+              const march = [440, 440, 554, 440, 440, 554];
+              march.forEach((f, i) => tone(f, i * 0.35, 0.25, 0.75, 'triangle'));
+              tone(659, 2.1, 0.6, 0.9);
+              totalDuration = 3.0;
+            } else {
+              tone(784, 0.0,  0.4, 0.8);
+              tone(659, 0.5,  0.4, 0.75);
+              tone(523, 1.0,  0.4, 0.7);
+              tone(440, 1.5,  0.7, 0.85);
+              tone(523, 2.4,  0.5, 0.6);
+              totalDuration = 3.1;
+            }
+
+            log(`🔊 Señal Ejercicio ${exerciseId} — ctx:${ctx.state}`, 'ok');
+
+            setTimeout(() => {
+              log('✓ Pausa terminada', 'ok');
+              resolve();
+            }, (totalDuration + 0.2) * 1000);
           };
 
-          let totalDuration = 3;
-
-          if (exerciseId === 1) {
-            // Ejercicio 1: Alerta ascendente triple — enérgica y motivadora
-            // Do — Mi — Sol — Do (acorde mayor ascendente)
-            tone(523, 0.0,  0.35, 0.8);
-            tone(659, 0.4,  0.35, 0.8);
-            tone(784, 0.8,  0.35, 0.8);
-            tone(1047, 1.2, 0.6,  0.9);
-            tone(523, 2.0,  0.15, 0.5);
-            tone(659, 2.2,  0.15, 0.5);
-            tone(784, 2.4,  0.15, 0.5);
-            tone(1047, 2.6, 0.5,  0.9);
-            totalDuration = 3.4;
-
-          } else if (exerciseId === 2) {
-            // Ejercicio 2: Pulso doble — ritmo de marcha, dos grupos de 3 pulsos
-            const march = [440, 440, 554, 440, 440, 554];
-            march.forEach((f, i) => tone(f, i * 0.35, 0.25, 0.75, 'triangle'));
-            tone(659, 2.1 + 0.0, 0.6, 0.9);
-            totalDuration = 3.0;
-
+          if (ctx.state === 'suspended') {
+            ctx.resume().then(doPlay).catch(e => {
+              log('No se pudo reanudar AudioContext: ' + e.message, 'err');
+              resolve();
+            });
           } else {
-            // Ejercicio 3: Señal de descanso — descendente calmante
-            // Sol — Mi — Do — La (arpeggio mayor descendente)
-            tone(784, 0.0,  0.4, 0.8);
-            tone(659, 0.5,  0.4, 0.75);
-            tone(523, 1.0,  0.4, 0.7);
-            tone(440, 1.5,  0.7, 0.85);
-            tone(523, 2.4,  0.5, 0.6);
-            totalDuration = 3.1;
+            doPlay();
           }
 
-          log(`🔊 Reproduciendo señal de Ejercicio ${exerciseId}`, "ok");
-
-          setTimeout(() => {
-            try { ctx.close(); } catch(_) {}
-            log("✓ Pausa terminada", "ok");
-            resolve();
-          }, (totalDuration + 0.2) * 1000);
-
         } catch (e) {
-          log("Error en síntesis de audio: " + e.message, "err");
-          resolve(); // nunca bloquear la pausa
+          log('Error en síntesis de audio: ' + e.message, 'err');
+          resolve();
         }
       });
     }
@@ -1620,6 +1928,12 @@
       if (!state.deviceId) { toast("Conéctate a Spotify primero", "error"); return; }
       const next = findNextBreak();
       runBreak(next ? next.exerciseId : 1);
+    }
+
+    async function testExercise(num) {
+      unlockAudio();
+      log(`🔉 Probando señal de Ejercicio ${num}...`, 'ok');
+      await playExerciseAudio(num);
     }
 
     function breakWatcher() {
