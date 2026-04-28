@@ -248,6 +248,96 @@
       margin-top: 10px
     }
 
+    /* ============ NOW PLAYING — diseño compacto ============ */
+    .now-card { padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
+    .now-head {
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .now-head h2 { font-size: 12px; }
+    .now-time {
+      font-family: 'SF Mono', Menlo, Consolas, monospace;
+      font-size: 12px; color: var(--muted);
+      letter-spacing: .5px; white-space: nowrap;
+      background: rgba(255,255,255,.04);
+      padding: 3px 8px; border-radius: 999px;
+      border: 1px solid var(--line);
+    }
+    .now-body {
+      display: flex; gap: 12px; align-items: center;
+    }
+    .cover-sm {
+      width: 56px; height: 56px; border-radius: 8px;
+      background: var(--panel-2); background-size: cover; background-position: center;
+      flex-shrink: 0; border: 1px solid var(--line);
+      box-shadow: 0 4px 12px rgba(0,0,0,.25);
+    }
+    .track-info { flex: 1; min-width: 0; }
+    .track-info .title {
+      font-size: 15px; font-weight: 700; line-height: 1.2;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .track-info .artist {
+      color: var(--muted); font-size: 12px; margin-top: 3px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+
+    /* Barra de progreso clickeable */
+    .progress-track {
+      position: relative; height: 6px;
+      background: rgba(255,255,255,.08);
+      border-radius: 999px; overflow: hidden;
+      cursor: pointer; transition: height .15s;
+    }
+    .progress-track:hover { height: 8px; }
+    .progress-fill {
+      height: 100%; width: 0%;
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+      border-radius: 999px;
+      transition: width .25s linear;
+      box-shadow: 0 0 8px rgba(29,185,84,.4);
+    }
+
+    /* Fila de controles */
+    .controls-row {
+      display: flex; justify-content: space-between; align-items: center;
+      gap: 12px; flex-wrap: wrap;
+    }
+    .ctrl-left { display: flex; gap: 6px; align-items: center; }
+    .ctrl-right { display: flex; gap: 12px; align-items: center; flex: 1; justify-content: flex-end; min-width: 180px; }
+    .vol-grp {
+      display: flex; align-items: center; gap: 8px;
+      flex: 1; min-width: 110px; max-width: 200px;
+    }
+    .vol-grp input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
+    .fade-grp {
+      display: flex; align-items: center; gap: 6px;
+    }
+    .fade-grp .lbl {
+      color: var(--muted); font-size: 10px; text-transform: uppercase;
+      letter-spacing: .8px; font-weight: 600;
+    }
+    .fade-grp select {
+      background: var(--panel-2); color: var(--text);
+      border: 1px solid var(--line); border-radius: 8px;
+      padding: 5px 8px; font-size: 12px; cursor: pointer;
+    }
+    .fade-grp select:hover { background: rgba(255,255,255,.08); }
+
+    /* Responsive — apilar pero sin encoger */
+    @media (max-width: 720px) {
+      .controls-row { flex-direction: column; align-items: stretch; gap: 10px; }
+      .ctrl-left, .ctrl-right { justify-content: center; }
+      .ctrl-right { flex-wrap: wrap; }
+      .vol-grp { max-width: none; }
+    }
+    @media (max-width: 480px) {
+      .now-card { padding: 14px; }
+      .cover-sm { width: 48px; height: 48px; }
+      .track-info .title { font-size: 14px; }
+      .ctrl-right { flex-direction: column; align-items: stretch; }
+      .vol-grp, .fade-grp { width: 100%; justify-content: center; }
+    }
+
     .schedule {
       display: flex;
       flex-wrap: wrap;
@@ -937,32 +1027,45 @@
         <div class="tab-panel" id="tab-player">
           <div class="main-content">
             <div class="row">
-              <!-- Now playing -->
-              <div class="card" style="flex:2;min-width:340px">
-                <h2>Reproduciendo ahora</h2>
-                <div class="now">
-                  <div class="cover" id="cover"></div>
-                  <div class="track">
+              <!-- Now playing — diseño compacto -->
+              <div class="card now-card" style="flex:2;min-width:320px">
+                <div class="now-head">
+                  <h2 style="margin:0">Reproduciendo</h2>
+                  <span class="now-time" id="trackTime">0:00 / 0:00</span>
+                </div>
+
+                <div class="now-body">
+                  <div class="cover-sm" id="cover"></div>
+                  <div class="track-info">
                     <div class="title" id="trackTitle">—</div>
                     <div class="artist" id="trackArtist">Presiona ▶ para empezar</div>
-                    <div class="controls">
-                      <button class="btn icon" id="prevBtn" title="Anterior">⏮</button>
-                      <button class="btn icon big" id="playBtn" title="Play/Pause">▶</button>
-                      <button class="btn icon" id="nextBtn" title="Siguiente (aleatoria)">⏭</button>
-                      <div class="vol" style="margin-left:12px;flex:1;max-width:180px">
-                        <span class="muted" style="font-size:16px">🔊</span>
-                        <input type="range" id="vol" min="0" max="100" value="70" />
-                      </div>
-                      <div style="display:flex;align-items:center;gap:6px;margin-left:8px"
-                           title="Crossfade aproximado: fade-out al final de cada canción. El SDK web de Spotify no soporta crossfade real (overlap), pero el fade hace que la transición se sienta continua.">
-                        <span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.5px">Fade</span>
-                        <select id="crossfadeSel" style="background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px">
-                          <option value="0">Off</option>
-                          <option value="4">4s</option>
-                          <option value="8" selected>8s</option>
-                          <option value="12">12s</option>
-                        </select>
-                      </div>
+                  </div>
+                </div>
+
+                <div class="progress-track" id="progressBar" title="Click para saltar a esa parte">
+                  <div class="progress-fill" id="progressFill"></div>
+                </div>
+
+                <div class="controls-row">
+                  <div class="ctrl-left">
+                    <button class="btn icon" id="prevBtn" title="Anterior">⏮</button>
+                    <button class="btn icon big" id="playBtn" title="Play/Pause">▶</button>
+                    <button class="btn icon" id="nextBtn" title="Siguiente (aleatoria)">⏭</button>
+                  </div>
+                  <div class="ctrl-right">
+                    <div class="vol-grp" title="Volumen">
+                      <span style="font-size:14px">🔊</span>
+                      <input type="range" id="vol" min="0" max="100" value="70" />
+                    </div>
+                    <div class="fade-grp"
+                         title="Crossfade aproximado: fade-out al final de cada canción. El SDK web no soporta overlap real.">
+                      <span class="lbl">Fade</span>
+                      <select id="crossfadeSel">
+                        <option value="0">Off</option>
+                        <option value="4">4s</option>
+                        <option value="8" selected>8s</option>
+                        <option value="12">12s</option>
+                      </select>
                     </div>
                   </div>
                 </div>
@@ -2026,6 +2129,70 @@
       $("nextBreakLabel").textContent = `a las ${next.time}`;
     }
 
+    /* ==========================================================
+       Progress bar de la canción actual
+       Se actualiza cada segundo leyendo el estado del SDK.
+       Click en la barra → seek a esa posición vía API.
+       ========================================================== */
+    function fmtMs(ms) {
+      if (!ms || ms < 0) return "0:00";
+      const totalSec = Math.floor(ms / 1000);
+      const m = Math.floor(totalSec / 60);
+      const s = totalSec % 60;
+      return `${m}:${String(s).padStart(2, "0")}`;
+    }
+
+    async function updateProgressUI() {
+      try {
+        const fill = document.getElementById("progressFill");
+        const timeEl = document.getElementById("trackTime");
+        if (!fill || !timeEl) return;
+        if (!state.player) return;
+
+        const st = await state.player.getCurrentState();
+        if (!st || !st.track_window?.current_track) {
+          fill.style.width = "0%";
+          timeEl.textContent = "0:00 / 0:00";
+          return;
+        }
+
+        const dur = st.duration || st.track_window.current_track.duration_ms || 0;
+        const pos = st.position || 0;
+        const pct = dur > 0 ? Math.min(100, (pos / dur) * 100) : 0;
+        fill.style.width = pct + "%";
+        timeEl.textContent = `${fmtMs(pos)} / ${fmtMs(dur)}`;
+      } catch (e) {
+        // Silencioso — el SDK puede estar transicionando
+      }
+    }
+
+    async function seekToPercent(pct) {
+      try {
+        if (!state.player) return;
+        const st = await state.player.getCurrentState();
+        if (!st || !st.duration) return;
+        const targetMs = Math.floor(st.duration * pct);
+        await api(`/me/player/seek?position_ms=${targetMs}&device_id=${state.deviceId}`, { method: "PUT" });
+        // Actualizar UI inmediatamente sin esperar al próximo tick
+        const fill = document.getElementById("progressFill");
+        if (fill) fill.style.width = (pct * 100) + "%";
+      } catch (e) {
+        log("Error al saltar: " + e.message, "warn");
+      }
+    }
+
+    function wireProgressBar() {
+      const bar = document.getElementById("progressBar");
+      if (!bar || bar._wired) return;
+      bar._wired = true;
+      bar.addEventListener("click", (ev) => {
+        const rect = bar.getBoundingClientRect();
+        const x = ev.clientX - rect.left;
+        const pct = Math.max(0, Math.min(1, x / rect.width));
+        seekToPercent(pct);
+      });
+    }
+
     async function runBreak(file) {
       if (state.breakInProgress) return;
       state.breakInProgress = true;
@@ -2349,6 +2516,7 @@
     function breakWatcher() {
       setInterval(async () => {
         updateCountdown();
+        updateProgressUI();
         renderNextRefresh();
 
         if (state.token && Date.now() >= state.tokenExpiresAt - 60000) {
@@ -2504,6 +2672,7 @@
     function wireUI() {
       $("searchBtn").onclick = searchSpotify;
       $("searchInput").onkeypress = (e) => { if (e.key === 'Enter') searchSpotify(); };
+      wireProgressBar();
 
       $("playBtn").onclick = async () => {
         if (!state.player) return;
