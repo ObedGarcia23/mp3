@@ -51,9 +51,10 @@
     .wrap {
       width: 100%;
       height: 100%;
-      padding: 24px;
+      padding: 16px 20px;
       display: flex;
       flex-direction: column;
+      overflow: hidden;
     }
 
     h1,
@@ -63,7 +64,7 @@
     }
 
     h1 {
-      font-size: 26px;
+      font-size: 22px;
       letter-spacing: -0.5px;
       font-weight: 800;
       background: linear-gradient(90deg, #fff, #9aa7b4);
@@ -81,7 +82,7 @@
 
     .row {
       display: flex;
-      gap: 20px;
+      gap: 10px;
       flex-wrap: wrap
     }
 
@@ -90,11 +91,11 @@
       backdrop-filter: var(--blur);
       -webkit-backdrop-filter: var(--blur);
       border: 1px solid var(--line);
-      border-radius: 16px;
-      padding: 24px;
+      border-radius: 14px;
+      padding: 16px 18px;
       flex: 1;
-      min-width: 280px;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+      min-width: 240px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
     }
 
     .card.tight {
@@ -209,9 +210,9 @@
     }
 
     .cover {
-      width: 96px;
-      height: 96px;
-      border-radius: 10px;
+      width: 72px;
+      height: 72px;
+      border-radius: 8px;
       background: var(--panel-2);
       background-size: cover;
       background-position: center;
@@ -225,7 +226,7 @@
     }
 
     .track .title {
-      font-size: 20px;
+      font-size: 16px;
       font-weight: 700;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -242,9 +243,9 @@
 
     .controls {
       display: flex;
-      gap: 10px;
+      gap: 8px;
       align-items: center;
-      margin-top: 14px
+      margin-top: 10px
     }
 
     .schedule {
@@ -299,11 +300,11 @@
     }
 
     .chip {
-      padding: 8px 16px;
+      padding: 5px 11px;
       border-radius: 999px;
       background: var(--panel-2);
       border: 1px solid var(--line);
-      font-size: 13px;
+      font-size: 12px;
       cursor: pointer;
       user-select: none;
       transition: all .2s;
@@ -330,10 +331,10 @@
       background: #05080c;
       border: 1px solid var(--line);
       border-radius: 10px;
-      padding: 10px;
+      padding: 8px 10px;
       font-family: "SF Mono", "Menlo", "Consolas", monospace;
-      font-size: 12px;
-      max-height: 140px;
+      font-size: 11px;
+      max-height: 100px;
       overflow: auto;
       color: #b0bec5
     }
@@ -353,32 +354,51 @@
     .grid-2 {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 14px
+      gap: 10px
     }
 
     .main-container {
       display: flex;
-      gap: 24px;
+      gap: 16px;
       align-items: stretch;
       flex: 1;
       min-height: 0;
+      overflow: hidden;
     }
 
     .sidebar {
-      width: 380px;
+      width: 320px;
       flex-shrink: 0;
       display: flex;
       flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    /* Pool list ocupa el espacio restante en el sidebar */
+    .sidebar .card {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    #poolList {
+      flex: 1;
+      overflow-y: auto;
+      min-height: 0;
     }
 
     .main-content {
       flex: 1;
       min-width: 0;
+      min-height: 0;
       display: flex;
       flex-direction: column;
-      gap: 20px;
+      gap: 10px;
       overflow-y: auto;
-      padding-right: 8px;
+      padding-right: 6px;
     }
 
     /* =====================================================
@@ -682,7 +702,7 @@
     }
 
     .countdown {
-      font-size: 36px;
+      font-size: 28px;
       font-weight: 800;
       letter-spacing: 2px;
       color: var(--accent-2);
@@ -694,9 +714,9 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 18px;
+      margin-bottom: 10px;
       flex-wrap: wrap;
-      gap: 12px
+      gap: 8px
     }
 
     .header .status {
@@ -2027,7 +2047,9 @@
        UI
        ========================================================== */
     function testExercise(id) {
-      playBreakAudio(`./Ejercicio${id}.mp3`);
+      unlockAudio();
+      log(`🔉 Probando señal de Ejercicio ${id}...`, 'ok');
+      playExerciseAudio(id);
     }
 
     function renderPool() {
