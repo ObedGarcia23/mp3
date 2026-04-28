@@ -1549,7 +1549,7 @@
       try {
         toast("Buscando...", "info");
         const market = state.userMarket || "US";
-        const data = await api(`/search?q=${encodeURIComponent(q)}&type=track&limit=15&market=${market}`);
+        const data = await api(`/search?q=${encodeURIComponent(q)}&type=track&limit=10&market=${market}`);
         if (data.tracks && data.tracks.items && data.tracks.items.length > 0) {
           const tracks = data.tracks.items
             .filter(t => t && t.uri && !t.uri.includes("local"))
