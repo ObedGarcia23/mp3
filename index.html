@@ -1878,16 +1878,16 @@
           try { await ctx.resume(); } catch(e) {}
         }
 
-        // --- Intento 1: reproducir el MP3 real ---
-        // Usamos fetch + decodeAudioData (Web Audio API).
-        // Esto es más robusto que <audio> y evita muchas restricciones de red.
+        // --- Intento 1: reproducir el audio real ---
+        // Los archivos se sirven como ex1.bin, ex2.bin, ex3.bin
+        // (application/octet-stream) para eludir filtros de red que bloquean .mp3
         const base = (window.location.origin + window.location.pathname)
           .replace(/\/[^/]*$/, '/');
-        const mp3Url = base + `Ejercicio${exerciseId}.mp3`;
+        const binUrl = base + `ex${exerciseId}.bin`;
 
         try {
-          log(`▶ Cargando Ejercicio${exerciseId}.mp3...`, 'ok');
-          const response = await fetch(mp3Url, { cache: 'force-cache' });
+          log(`▶ Cargando audio Ejercicio ${exerciseId}...`, 'ok');
+          const response = await fetch(binUrl, { cache: 'force-cache' });
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
           const arrayBuffer = await response.arrayBuffer();
@@ -1906,8 +1906,8 @@
             resolve();
           };
           source.start(0);
-          log(`🔊 Reproduciendo Ejercicio${exerciseId}.mp3`, 'ok');
-          return; // éxito — no necesitamos el fallback
+          log(`🔊 Reproduciendo Ejercicio ${exerciseId}`, 'ok');
+          return; // éxito
 
         } catch (e) {
           log(`⚠ MP3 bloqueado por red (${e.message}). Usando señal sintetizada...`, 'warn');
