@@ -1475,13 +1475,12 @@
         const timeStr = state.exTimes[i];
         if (!timeStr) continue;
         const [h, m] = timeStr.split(":").map(Number);
-        const audioPath = getMp3Url(i);
-        sched.push({ time: timeStr, file: audioPath, id: i });
+        sched.push({ time: timeStr, exerciseId: i, id: i });
 
         const h12 = (h + 12) % 24;
         const time12 = `${String(h12).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
         if (time12 !== timeStr) {
-          sched.push({ time: time12, file: audioPath, id: i, is12h: true });
+          sched.push({ time: time12, exerciseId: i, id: i, is12h: true });
         }
       }
       return sched.sort((a, b) => timeToMin(a.time) - timeToMin(b.time));
@@ -1493,10 +1492,10 @@
       const now = new Date();
       const curMin = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
       for (const slot of sched) {
-        if (timeToMin(slot.time) > curMin) return { time: slot.time, file: slot.file, when: todayAt(slot.time), id: slot.id };
+        if (timeToMin(slot.time) > curMin) return { time: slot.time, exerciseId: slot.exerciseId, when: todayAt(slot.time), id: slot.id };
       }
       const tomorrow = new Date(todayAt(sched[0].time).getTime() + 86400000);
-      return { time: sched[0].time, file: sched[0].file, when: tomorrow, id: sched[0].id };
+      return { time: sched[0].time, exerciseId: sched[0].exerciseId, when: tomorrow, id: sched[0].id };
     }
     function todayAt(hhmm) {
       const [h, m] = hhmm.split(":").map(Number);
@@ -1518,7 +1517,7 @@
     async function runBreak(file) {
       if (state.breakInProgress) return;
       state.breakInProgress = true;
-      log(`⏸ Iniciando pausa ergonómica (${file || 'beep'})`, "warn");
+      log(`⏸ Iniciando pausa ergonómica — Ejercicio ${file || 1}`, "warn");
       toast("🧘 Pausa ergonómica — ejercicios");
 
       try {
@@ -1529,7 +1528,7 @@
         }
       } catch (e) { log("No pude leer estado: " + e.message, "warn") }
 
-      await playBreakAudio(file);
+      await playExerciseAudio(file);
 
       try {
         if (state.wasPlayingBeforeBreak) {
@@ -1541,56 +1540,86 @@
       state.breakInProgress = false;
     }
 
-    function playBreakAudio(file) {
-      return new Promise(async resolve => {
-        if (file) {
-          try {
-            // Usar Audio nativo permite que el navegador envíe el Referer correcto (evitando 403 por Hotlink Protection)
-            const audio = new Audio(file);
-            audio.volume = 1.0;
-            audio.onended = () => { log("✓ Pausa terminada", "ok"); resolve(); };
-            audio.onerror = () => {
-              log("Error reproduciendo MP3: " + file, "err");
-              playSynthesizedBeep(resolve);
-            };
+    /* ==========================================================
+       Audio sintetizado para pausas ergonómicas
+       100% generado en el navegador — sin ninguna petición de red.
+       Cada ejercicio tiene un patrón de tonos distinto y reconocible.
+       ========================================================== */
+    function playExerciseAudio(exerciseId) {
+      return new Promise(resolve => {
+        try {
+          const ctx = new (window.AudioContext || window.webkitAudioContext)();
+          const master = ctx.createGain();
+          master.gain.value = 0.55;
+          master.connect(ctx.destination);
 
-            const playPromise = audio.play();
-            if (playPromise !== undefined) {
-              playPromise.catch(e => {
-                log("No se pudo reproducir MP3: " + e.message, "err");
-                playSynthesizedBeep(resolve);
-              });
-            }
-          } catch (e) {
-            log("Excepción al preparar MP3: " + e.message, "err");
-            playSynthesizedBeep(resolve);
+          // Helper: tono simple con envelope ADSR
+          const tone = (freq, when, dur, vol = 0.7, type = 'sine') => {
+            const o = ctx.createOscillator();
+            const g = ctx.createGain();
+            o.type = type;
+            o.frequency.value = freq;
+            o.connect(g); g.connect(master);
+            const t = ctx.currentTime + when;
+            g.gain.setValueAtTime(0, t);
+            g.gain.linearRampToValueAtTime(vol, t + 0.04);
+            g.gain.setValueAtTime(vol, t + dur - 0.08);
+            g.gain.linearRampToValueAtTime(0, t + dur);
+            o.start(t); o.stop(t + dur);
+          };
+
+          let totalDuration = 3;
+
+          if (exerciseId === 1) {
+            // Ejercicio 1: Alerta ascendente triple — enérgica y motivadora
+            // Do — Mi — Sol — Do (acorde mayor ascendente)
+            tone(523, 0.0,  0.35, 0.8);
+            tone(659, 0.4,  0.35, 0.8);
+            tone(784, 0.8,  0.35, 0.8);
+            tone(1047, 1.2, 0.6,  0.9);
+            tone(523, 2.0,  0.15, 0.5);
+            tone(659, 2.2,  0.15, 0.5);
+            tone(784, 2.4,  0.15, 0.5);
+            tone(1047, 2.6, 0.5,  0.9);
+            totalDuration = 3.4;
+
+          } else if (exerciseId === 2) {
+            // Ejercicio 2: Pulso doble — ritmo de marcha, dos grupos de 3 pulsos
+            const march = [440, 440, 554, 440, 440, 554];
+            march.forEach((f, i) => tone(f, i * 0.35, 0.25, 0.75, 'triangle'));
+            tone(659, 2.1 + 0.0, 0.6, 0.9);
+            totalDuration = 3.0;
+
+          } else {
+            // Ejercicio 3: Señal de descanso — descendente calmante
+            // Sol — Mi — Do — La (arpeggio mayor descendente)
+            tone(784, 0.0,  0.4, 0.8);
+            tone(659, 0.5,  0.4, 0.75);
+            tone(523, 1.0,  0.4, 0.7);
+            tone(440, 1.5,  0.7, 0.85);
+            tone(523, 2.4,  0.5, 0.6);
+            totalDuration = 3.1;
           }
-        } else {
-          playSynthesizedBeep(resolve);
+
+          log(`🔊 Reproduciendo señal de Ejercicio ${exerciseId}`, "ok");
+
+          setTimeout(() => {
+            try { ctx.close(); } catch(_) {}
+            log("✓ Pausa terminada", "ok");
+            resolve();
+          }, (totalDuration + 0.2) * 1000);
+
+        } catch (e) {
+          log("Error en síntesis de audio: " + e.message, "err");
+          resolve(); // nunca bloquear la pausa
         }
       });
-    }
-
-    function playSynthesizedBeep(resolve) {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const play = (freq, when, dur) => {
-        const o = ctx.createOscillator();
-        const g = ctx.createGain();
-        o.frequency.value = freq;
-        o.connect(g); g.connect(ctx.destination);
-        g.gain.setValueAtTime(0, ctx.currentTime + when);
-        g.gain.linearRampToValueAtTime(0.25, ctx.currentTime + when + 0.05);
-        g.gain.linearRampToValueAtTime(0, ctx.currentTime + when + dur);
-        o.start(ctx.currentTime + when); o.stop(ctx.currentTime + when + dur);
-      };
-      play(880, 0, .3); play(1100, .4, .3); play(1320, .8, .5);
-      setTimeout(() => { ctx.close(); log("✓ Beep de aviso completado", "ok"); resolve(); }, 2000);
     }
 
     async function triggerBreakNow() {
       if (!state.deviceId) { toast("Conéctate a Spotify primero", "error"); return; }
       const next = findNextBreak();
-      runBreak(next ? next.file : null);
+      runBreak(next ? next.exerciseId : 1);
     }
 
     function breakWatcher() {
@@ -1625,7 +1654,7 @@
 
         if (slot && now.getSeconds() < 2 && key !== state.lastTriggeredKey) {
           state.lastTriggeredKey = key;
-          runBreak(slot.file);
+          runBreak(slot.exerciseId);
         }
       }, 1000);
     }
