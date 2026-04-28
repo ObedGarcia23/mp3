@@ -1949,6 +1949,7 @@
 
         setTimeout(() => { log('✓ Pausa terminada', 'ok'); resolve(); }, (totalDuration + 0.2) * 1000);
       });
+    }
 
     async function triggerBreakNow() {
       if (!state.deviceId) { toast("Conéctate a Spotify primero", "error"); return; }
