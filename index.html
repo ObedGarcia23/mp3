@@ -350,9 +350,73 @@
       gap: 14px
     }
 
-    @media(max-width:720px) {
+    .main-container {
+      display: flex;
+      gap: 24px;
+      align-items: stretch;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .sidebar {
+      width: 380px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .main-content {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      overflow-y: auto;
+      padding-right: 8px;
+    }
+
+    @media(max-width: 900px) {
+      html, body {
+        overflow-y: auto;
+        height: auto;
+        min-height: 100%;
+      }
       .grid-2 {
         grid-template-columns: 1fr
+      }
+      .main-container {
+        flex-direction: column;
+        overflow-y: auto;
+      }
+      .sidebar {
+        width: 100%;
+        flex-shrink: 0;
+        height: auto;
+        min-height: 400px;
+      }
+      .wrap {
+        padding: 12px;
+        height: auto;
+        min-height: 100%;
+      }
+      .main-content {
+        overflow-y: visible;
+        padding-right: 0;
+      }
+      .header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .now {
+        flex-direction: column;
+        text-align: center;
+      }
+      .controls {
+        justify-content: center;
+        flex-wrap: wrap;
+      }
+      .row {
+        flex-direction: column;
       }
     }
 
@@ -557,14 +621,21 @@
         </div>
       </div>
 
-      <div style="display:flex; gap:24px; align-items:stretch; flex:1; min-height:0;">
+      <div class="main-container">
         <!-- SIDEBAR: Track Pool -->
-        <div class="card" style="width: 380px; flex-shrink: 0; display:flex; flex-direction:column;">
+        <div class="card sidebar">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
             <h2 style="margin:0;">Catálogo (<span id="poolCount">0</span>)</h2>
             <button class="btn secondary" style="padding:6px 12px; font-size:12px;" onclick="forcePoolRefresh()"
               title="Refrescar catálogo ahora con nuevos artistas">🔄 Nuevo lote</button>
           </div>
+          
+          <!-- BUSCADOR -->
+          <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+            <input type="text" id="searchInput" placeholder="Buscar canción o artista..." style="flex:1;" />
+            <button class="btn" id="searchBtn" style="padding: 8px 12px;">🔍</button>
+          </div>
+
           <p class="muted" style="margin-top:0; margin-bottom:6px;">Click en una canción para reproducirla. El catálogo
             se renueva cada 2h con artistas nuevos.</p>
           <p class="muted" id="nextRefreshLabel"
@@ -575,8 +646,7 @@
         </div>
 
         <!-- MAIN CONTENT -->
-        <div
-          style="flex: 1; min-width: 0; display:flex; flex-direction:column; gap:20px; overflow-y:auto; padding-right:8px;">
+        <div class="main-content">
           <div class="row">
             <!-- Now playing -->
             <div class="card" style="flex:2;min-width:340px">
@@ -684,8 +754,14 @@
   </div>
 
   <!-- Spotify Web Playback SDK -->
-  <script src="https://sdk.scdn.co/spotify-player.js"></script>
   <script>
+    function loadSpotifySDK() {
+      const script = document.createElement("script");
+      script.src = "https://sdk.scdn.co/spotify-player.js";
+      script.async = true;
+      document.body.appendChild(script);
+    }
+
     /* =========================================================
        TURNO PLAYER — Spotify 24/7 + pausas ergonómicas
        ========================================================= */
@@ -1467,6 +1543,38 @@
       toast("Catálogo renovado");
     }
 
+    async function searchSpotify() {
+      const q = $("searchInput").value.trim();
+      if (!q) return;
+      try {
+        toast("Buscando...", "info");
+        const market = state.userMarket || "US";
+        const data = await api(`/search?q=${encodeURIComponent(q)}&type=track&limit=15&market=${market}`);
+        if (data.tracks && data.tracks.items && data.tracks.items.length > 0) {
+          const tracks = data.tracks.items
+            .filter(t => t && t.uri && !t.uri.includes("local"))
+            .map(t => ({
+              uri: t.uri,
+              name: t.name,
+              artists: t.artists,
+              album: t.album
+            }));
+          
+          if (tracks.length > 0) {
+            state.trackPool.unshift(...tracks);
+            toast(`Agregados ${tracks.length} resultados al catálogo.`);
+            renderPool();
+          } else {
+            toast("No hay resultados reproducibles", "warn");
+          }
+        } else {
+          toast("No se encontraron resultados", "warn");
+        }
+      } catch (e) {
+        log("Error en búsqueda: " + e.message, "err");
+      }
+    }
+
     function renderNextRefresh() {
       const el = document.getElementById("nextRefreshLabel");
       if (!el) return;
@@ -1544,6 +1652,9 @@
        Listeners
        ========================================================== */
     function wireUI() {
+      $("searchBtn").onclick = searchSpotify;
+      $("searchInput").onkeypress = (e) => { if (e.key === 'Enter') searchSpotify(); };
+
       $("playBtn").onclick = async () => {
         if (!state.player) return;
         const st = await state.player.getCurrentState();
@@ -1606,6 +1717,7 @@
         breakWatcher();
         log("✓ Sesión iniciada. Cargando catálogo...", "ok");
         buildTrackPool();
+        loadSpotifySDK();
       } else {
         if (state.clientId) $("clientIdInput").value = state.clientId;
       }
