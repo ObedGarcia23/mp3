@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Turno Player — Subir MP3 a Supabase</title>
+<style>
+  :root{
+    --bg:#0b0f14; --panel:rgba(20,26,34,.6); --line:rgba(255,255,255,.08);
+    --text:#e6edf3; --muted:#9aa7b4; --accent:#1DB954; --accent-2:#1ed760;
+    --warn:#f5a524; --danger:#ef4444; --ok:#22c55e;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;background:linear-gradient(135deg,#06090d 0%,#111822 100%);
+    color:var(--text);font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    display:flex;align-items:center;justify-content:center;padding:24px}
+  .card{background:var(--panel);backdrop-filter:blur(20px);
+    border:1px solid var(--line);border-radius:16px;padding:32px;
+    box-shadow:0 8px 32px rgba(0,0,0,.15);max-width:640px;width:100%}
+  h1{margin:0 0 8px;font-size:24px;font-weight:800;
+    background:linear-gradient(90deg,#fff,#9aa7b4);-webkit-background-clip:text;
+    -webkit-text-fill-color:transparent}
+  .muted{color:var(--muted);font-size:13px;line-height:1.5}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px}
+  .slot{background:rgba(255,255,255,.03);border:1px solid var(--line);
+    border-radius:12px;padding:14px}
+  .slot h3{margin:0 0 8px;font-size:14px;color:var(--accent-2)}
+  input[type=file]{width:100%;background:rgba(255,255,255,.05);
+    border:1px solid var(--line);border-radius:8px;padding:8px;color:var(--text);
+    font-size:13px}
+  .btn{background:var(--accent);color:#041307;border:none;border-radius:999px;
+    padding:12px 24px;font-weight:700;cursor:pointer;font-size:14px;
+    width:100%;margin-top:18px;transition:.15s}
+  .btn:hover{background:var(--accent-2)}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .status{margin-top:18px;padding:12px;border-radius:10px;font-size:13px;
+    background:rgba(255,255,255,.03);border:1px solid var(--line);
+    min-height:80px;font-family:'SF Mono',Menlo,Consolas,monospace;
+    white-space:pre-wrap;line-height:1.6}
+  .status .ok{color:var(--ok)}
+  .status .warn{color:var(--warn)}
+  .status .err{color:var(--danger)}
+  .progress{height:6px;background:rgba(255,255,255,.05);border-radius:4px;
+    overflow:hidden;margin-top:8px}
+  .progress > div{height:100%;background:var(--accent);width:0;
+    transition:width .3s}
+  a{color:var(--accent-2)}
+  code{background:rgba(255,255,255,.05);padding:2px 6px;border-radius:4px;
+    font-size:12px;word-break:break-all}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>📤 Subir MP3 de ejercicios</h1>
+  <p class="muted">
+    Selecciona los 3 archivos MP3 de tu carpeta local
+    (<code>Ejercicio1.mp3</code>, <code>Ejercicio2.mp3</code>,
+    <code>Ejercicio3.mp3</code>) y subilos al bucket público de Supabase
+    <code>turno-player-audio</code>.
+    <br/><br/>
+    Una vez subidos, <code>index.html</code> los carga automáticamente
+    desde Supabase y se reproducen aunque la red empresarial bloquee
+    Vercel para los MP3.
+  </p>
+
+  <div class="row">
+    <div class="slot">
+      <h3>Ejercicio 1</h3>
+      <input type="file" id="f1" accept="audio/mpeg,audio/mp3,.mp3" />
+    </div>
+    <div class="slot">
+      <h3>Ejercicio 2</h3>
+      <input type="file" id="f2" accept="audio/mpeg,audio/mp3,.mp3" />
+    </div>
+    <div class="slot" style="grid-column:1 / -1">
+      <h3>Ejercicio 3</h3>
+      <input type="file" id="f3" accept="audio/mpeg,audio/mp3,.mp3" />
+    </div>
+  </div>
+
+  <button class="btn" id="upBtn">Subir los 3 archivos</button>
+  <div class="progress"><div id="bar"></div></div>
+  <div class="status" id="status">Esperando archivos…</div>
+
+  <p class="muted" style="margin-top:18px">
+    Cuando termine, las URLs públicas serán:<br/>
+    <code id="u1">…</code><br/>
+    <code id="u2">…</code><br/>
+    <code id="u3">…</code>
+  </p>
+</div>
+
+<script type="module">
+  import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+  const SUPABASE_URL  = "https://kpmseufpfyvwoyvdqhtq.supabase.co";
+  // Publishable key (safe to ship en el cliente — está limitada por RLS)
+  const SUPABASE_KEY  = "sb_publishable_M9_nadiyDBgM7Rr0pcPiwg_0xBA4Lua";
+  const BUCKET        = "turno-player-audio";
+  const NAMES         = { 1: "Ejercicio1.mp3", 2: "Ejercicio2.mp3", 3: "Ejercicio3.mp3" };
+
+  // Mostrar las URLs finales aunque no se haya subido nada todavía
+  for(const k of [1,2,3]){
+    document.getElementById("u"+k).textContent =
+      `${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/${NAMES[k]}`;
+  }
+
+  const supa = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+  const $ = id => document.getElementById(id);
+  const status = $("status");
+  const bar = $("bar");
+
+  function log(msg, cls=""){
+    const span = document.createElement("span");
+    if(cls) span.className = cls;
+    span.textContent = msg + "\n";
+    status.appendChild(span);
+    status.scrollTop = status.scrollHeight;
+  }
+
+  async function uploadOne(num, file){
+    const path = NAMES[num];
+    log(`▶ Subiendo ${path}  (${(file.size/1024).toFixed(1)} KB)…`);
+    const { data, error } = await supa.storage
+      .from(BUCKET)
+      .upload(path, file, {
+        cacheControl: "3600",
+        upsert: true,
+        contentType: "audio/mpeg",
+      });
+    if(error){ log(`  ✗ ${error.message}`, "err"); return false; }
+    const { data: pub } = supa.storage.from(BUCKET).getPublicUrl(path);
+    log(`  ✓ OK → ${pub.publicUrl}`, "ok");
+    return true;
+  }
+
+  $("upBtn").onclick = async () => {
+    const files = { 1: $("f1").files[0], 2: $("f2").files[0], 3: $("f3").files[0] };
+    if(!files[1] || !files[2] || !files[3]){
+      log("⚠ Faltan archivos. Seleccioná los 3 antes de subir.", "warn");
+      return;
+    }
+    $("upBtn").disabled = true;
+    status.innerHTML = "";
+    bar.style.width = "0%";
+
+    let done = 0;
+    for(const k of [1,2,3]){
+      const ok = await uploadOne(k, files[k]);
+      done++;
+      bar.style.width = ((done/3)*100) + "%";
+      if(!ok){ $("upBtn").disabled = false; return; }
+    }
+
+    log("\n🎉 Listo. Los 3 archivos están en Supabase Storage.", "ok");
+    log("Abrí ahora index.html — los ejercicios suenan desde la nube.", "ok");
+    $("upBtn").disabled = false;
+  };
+</script>
+</body>
+</html>

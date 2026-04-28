@@ -1869,25 +1869,41 @@
     document.addEventListener('touchstart', unlockAudio, { once: false });
     document.addEventListener('keydown', unlockAudio, { once: false });
 
+    /* ==========================================================
+       Audio para pausas ergonómicas (Desde Hosting Externo)
+       ========================================================== */
+    // URLs públicas del bucket de Supabase Storage
+    // Bucket: turno-player-audio  ·  Proyecto: tourshn (kpmseufpfyvwoyvdqhtq)
+    const EXTERNAL_AUDIO_URLS = {
+      1: "https://kpmseufpfyvwoyvdqhtq.supabase.co/storage/v1/object/public/turno-player-audio/Ejercicio1.mp3",
+      2: "https://kpmseufpfyvwoyvdqhtq.supabase.co/storage/v1/object/public/turno-player-audio/Ejercicio2.mp3",
+      3: "https://kpmseufpfyvwoyvdqhtq.supabase.co/storage/v1/object/public/turno-player-audio/Ejercicio3.mp3"
+    };
+
     function playExerciseAudio(exerciseId) {
       return new Promise(async resolve => {
         const ctx = getAudioContext();
 
-        // Asegurar que el contexto esté activo
         if (ctx.state === 'suspended') {
           try { await ctx.resume(); } catch(e) {}
         }
 
-        // --- Intento 1: reproducir el audio real ---
-        // Los archivos se sirven como ex1.bin, ex2.bin, ex3.bin
-        // (application/octet-stream) para eludir filtros de red que bloquean .mp3
-        const base = (window.location.origin + window.location.pathname)
-          .replace(/\/[^/]*$/, '/');
-        const binUrl = base + `ex${exerciseId}.bin`;
+        // Usamos la URL externa configurada arriba
+        const audioUrl = EXTERNAL_AUDIO_URLS[exerciseId];
 
         try {
-          log(`▶ Cargando audio Ejercicio ${exerciseId}...`, 'ok');
-          const response = await fetch(binUrl, { cache: 'force-cache' });
+          log(`▶ Descargando ejercicio desde nube...`, 'ok');
+          
+          // Fetch con timeout para no quedar colgados si la red es lenta
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 seg máx
+
+          const response = await fetch(audioUrl, { 
+            signal: controller.signal,
+            mode: 'cors' 
+          });
+          clearTimeout(timeoutId);
+
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
           const arrayBuffer = await response.arrayBuffer();
@@ -1905,15 +1921,16 @@
             log('✓ Ejercicio terminado', 'ok');
             resolve();
           };
+          
           source.start(0);
-          log(`🔊 Reproduciendo Ejercicio ${exerciseId}`, 'ok');
-          return; // éxito
+          log(`🔊 Reproduciendo audio desde nube`, 'ok');
+          return;
 
         } catch (e) {
-          log(`⚠ MP3 bloqueado por red (${e.message}). Usando señal sintetizada...`, 'warn');
+          log(`⚠ Error en nube: ${e.message}. Usando señal local...`, 'warn');
         }
 
-        // --- Fallback: señal sintetizada si la red bloquea el MP3 ---
+        // --- Fallback: señal sintetizada (SIEMPRE FUNCIONA) ---
         const master = ctx.createGain();
         master.gain.value = 0.6;
         master.connect(ctx.destination);
@@ -1931,23 +1948,22 @@
           o.start(t); o.stop(t + dur);
         };
 
-        let totalDuration = 3;
+        let d = 3;
         if (exerciseId === 1) {
           tone(523, 0.0, 0.35, 0.8); tone(659, 0.4, 0.35, 0.8);
           tone(784, 0.8, 0.35, 0.8); tone(1047, 1.2, 0.6, 0.9);
           tone(523, 2.0, 0.15, 0.5); tone(659, 2.2, 0.15, 0.5);
           tone(784, 2.4, 0.15, 0.5); tone(1047, 2.6, 0.5, 0.9);
-          totalDuration = 3.4;
+          d = 3.4;
         } else if (exerciseId === 2) {
           [440, 440, 554, 440, 440, 554].forEach((f, i) => tone(f, i * 0.35, 0.25, 0.75, 'triangle'));
-          tone(659, 2.1, 0.6, 0.9); totalDuration = 3.0;
+          tone(659, 2.1, 0.6, 0.9); d = 3.0;
         } else {
           tone(784, 0.0, 0.4, 0.8); tone(659, 0.5, 0.4, 0.75);
           tone(523, 1.0, 0.4, 0.7); tone(440, 1.5, 0.7, 0.85);
-          tone(523, 2.4, 0.5, 0.6); totalDuration = 3.1;
+          tone(523, 2.4, 0.5, 0.6); d = 3.1;
         }
-
-        setTimeout(() => { log('✓ Pausa terminada', 'ok'); resolve(); }, (totalDuration + 0.2) * 1000);
+        setTimeout(() => { log('✓ Pausa terminada', 'ok'); resolve(); }, (d + 0.2) * 1000);
       });
     }
 
