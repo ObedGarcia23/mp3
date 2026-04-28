@@ -1536,20 +1536,24 @@
       return new Promise(async resolve => {
         if (file) {
           try {
-            // Se usa fetch para eludir reglas estrictas de Hotlink/CORS que causan el error 403
-            const res = await fetch(file + "?v=" + Date.now(), { referrerPolicy: "no-referrer" });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
-
-            const audio = new Audio(url);
+            // Usar Audio nativo permite que el navegador envíe el Referer correcto (evitando 403 por Hotlink Protection)
+            const audio = new Audio(file);
             audio.volume = 1.0;
-            audio.onended = () => { log("✓ Pausa terminada", "ok"); URL.revokeObjectURL(url); resolve(); };
-            audio.onerror = () => { log("Error interno reproduciendo MP3: " + file, "err"); URL.revokeObjectURL(url); resolve(); };
-            audio.play().catch(e => { log("No se pudo reproducir MP3: " + e.message, "err"); URL.revokeObjectURL(url); resolve(); });
+            audio.onended = () => { log("✓ Pausa terminada", "ok"); resolve(); };
+            audio.onerror = () => {
+              log("Error reproduciendo MP3: " + file, "err");
+              playSynthesizedBeep(resolve);
+            };
+
+            const playPromise = audio.play();
+            if (playPromise !== undefined) {
+              playPromise.catch(e => {
+                log("No se pudo reproducir MP3: " + e.message, "err");
+                playSynthesizedBeep(resolve);
+              });
+            }
           } catch (e) {
-            log("Error descargando MP3 (403): " + e.message, "err");
-            // Fallback al sonido sintetizado si falla la descarga
+            log("Excepción al preparar MP3: " + e.message, "err");
             playSynthesizedBeep(resolve);
           }
         } else {
