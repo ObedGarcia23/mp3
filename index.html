@@ -1561,8 +1561,8 @@
             }));
           
           if (tracks.length > 0) {
-            state.trackPool.unshift(...tracks);
-            toast(`Agregados ${tracks.length} resultados al catálogo.`);
+            state.trackPool = tracks;
+            toast(`Mostrando ${tracks.length} resultados de búsqueda.`);
             renderPool();
           } else {
             toast("No hay resultados reproducibles", "warn");
