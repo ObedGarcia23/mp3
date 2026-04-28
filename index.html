@@ -1238,6 +1238,7 @@
       }
 
       try {
+        state.lastTrackChangeTime = Date.now();
         await playWithRetry(track.uri);
         log("▶ " + track.name + " — " + track.artists.map(a => a.name).join(", "));
 
@@ -1292,6 +1293,7 @@
       }
 
       try {
+        state.lastTrackChangeTime = Date.now();
         await playWithRetry(track.uri);
         log("▶ " + track.name + " — " + track.artists.map(a => a.name).join(", "));
         api("/me/player/shuffle?state=false", { method: "PUT" }).catch(() => { });
@@ -1313,6 +1315,7 @@
       }
       const track = state.history.pop();
       try {
+        state.lastTrackChangeTime = Date.now();
         await api(`/me/player/play?device_id=${state.deviceId}`, {
           method: "PUT",
           body: JSON.stringify({ uris: [track.uri] })
@@ -1377,8 +1380,14 @@
           const img = t.album.images?.[0]?.url;
           if (img) $("cover").style.backgroundImage = `url('${img}')`;
         }
+        
+        // El SDK a veces dispara paused:true y position:0 mientras carga una nueva canción.
+        // Usamos un debounce de 3 segundos basado en lastTrackChangeTime para no saltar accidentalmente.
         if (s.paused && s.position === 0 && s.track_window.previous_tracks.length > 0 && !state.breakInProgress) {
-          playNextRandom();
+          if (!state.lastTrackChangeTime || Date.now() - state.lastTrackChangeTime > 3000) {
+            state.lastTrackChangeTime = Date.now();
+            playNextRandom();
+          }
         }
       });
       player.addListener("initialization_error", ({ message }) => log("Init error: " + message, "err"));
