@@ -1057,16 +1057,8 @@
                       <span style="font-size:14px">🔊</span>
                       <input type="range" id="vol" min="0" max="100" value="70" />
                     </div>
-                    <div class="fade-grp"
-                         title="Crossfade aproximado: fade-out al final de cada canción. El SDK web no soporta overlap real.">
-                      <span class="lbl">Fade</span>
-                      <select id="crossfadeSel">
-                        <option value="0">Off</option>
-                        <option value="4">4s</option>
-                        <option value="8" selected>8s</option>
-                        <option value="12">12s</option>
-                      </select>
-                    </div>
+                    <!-- Fade automático eliminado: el volumen lo controla el usuario. -->
+                    <input type="hidden" id="crossfadeSel" value="0" />
                   </div>
                 </div>
               </div>
@@ -1130,11 +1122,10 @@
               <!-- Genres and config -->
               <div class="card">
                 <h2>Géneros activos</h2>
-                <p class="muted">Selecciona los géneros de los que sacar canciones aleatorias. En turno de noche
-                  (19:00–07:00) se filtran automáticamente los géneros más lentos.</p>
+                <p class="muted">Selecciona los géneros de los que sacar canciones aleatorias. Sonará todo lo que tengas seleccionado, sin importar si es turno de día o noche.</p>
                 <div class="genres" id="genresList"></div>
 
-                <h2 style="margin-top:20px">Turno de noche</h2>
+                <h2 style="margin-top:20px">Horario del turno de noche</h2>
                 <div class="row" style="gap:10px;margin-top:6px">
                   <div style="flex:1;min-width:120px">
                     <label>Inicio</label>
@@ -1145,8 +1136,7 @@
                     <input type="time" id="nightEnd" value="07:00" />
                   </div>
                 </div>
-                <p class="muted" style="margin-top:8px">De noche solo sonarán géneros de alta energía: Reggaetón, EDM,
-                  Dance Pop y Rock movido. No habrá baladas ni lo-fi.</p>
+                <p class="muted" style="margin-top:8px">Solo se usa para mostrar el indicador de turno. Ya no se aplican restricciones de género.</p>
               </div>
             </div>
           </div>
@@ -1208,7 +1198,9 @@
        Development Mode (nov 2024). Usamos en su lugar el endpoint
        /artists/{id}/top-tracks que SÍ funciona para todas las apps.
        Cada artista aporta ~10 tracks top a la pool.
-       Los géneros nightSafe=false NO suenan durante el turno noche.
+       (El campo nightSafe se mantiene por compatibilidad pero YA NO se
+       aplica como filtro: en cualquier turno suena todo lo que el usuario
+       tenga seleccionado.)
     */
     const GENRE_SEEDS = [
       {
@@ -1293,6 +1285,19 @@
           "Un Corazón", "Evan Craft", "TobyMac", "Lecrae"
         ]
       },
+      {
+        id: "banda", label: "Música Banda / Regional Mexicano", nightSafe: true,
+        artists: [
+          "Banda MS", "Banda MS de Sergio Lizárraga", "Banda El Recodo",
+          "Banda Los Recoditos", "La Adictiva", "La Arrolladora Banda el Limón",
+          "Calibre 50", "Grupo Firme", "Christian Nodal", "Carin León",
+          "Eslabon Armado", "Junior H", "Natanael Cano", "Fuerza Regida",
+          "Peso Pluma", "Gerardo Ortiz", "Espinoza Paz", "Julión Álvarez",
+          "Pancho Barraza", "Alfredo Olivas", "El Fantasma", "Edén Muñoz",
+          "Los Tigres del Norte", "Los Tucanes de Tijuana", "Banda Cuisillos",
+          "Banda Carnaval", "Joss Favela", "Lupita Infante"
+        ]
+      },
     ];
 
     /* Cache de artist IDs (evita re-buscar cada vez) */
@@ -1340,28 +1345,74 @@
     const POOL_REFRESH_MS = 2 * 60 * 60 * 1000; // 2 horas
     // Watchdog: cada cuánto verifica el estado real de Spotify
     const WATCHDOG_INTERVAL_MS = 5000;
-    // Cuántos ciclos del watchdog sin avanzar = track stuck (5s * 3 = 15s)
-    const WATCHDOG_STUCK_LIMIT = 3;
-    // Crossfade aproximado (fade-out últimos N segundos antes de saltar)
-    // 0 = sin crossfade. El SDK no soporta crossfade REAL — esto fade-outea
-    // la pista actual y arranca la siguiente al volumen normal.
-    state.crossfadeSec = 8;
+    // Cuántos ciclos del watchdog sin avanzar = track stuck (5s * 6 = 30s).
+    // Antes era 15s y eso producía saltos prematuros cuando el reporte de
+    // posición de Spotify se demoraba en actualizarse.
+    const WATCHDOG_STUCK_LIMIT = 6;
+    // No considerar "pausado debe reanudar" si la pista cambió hace muy poco
+    // — Spotify a menudo reporta is_playing:false durante 1-2s al transicionar.
+    const WATCHDOG_TRACK_CHANGE_GRACE_MS = 8000;
+    // Crossfade desactivado por completo. El volumen lo controla el usuario.
+    state.crossfadeSec = 0;
     state._fadeStartTimer = null;
     state._fadeStepInterval = null;
 
     /* ---- Utilidades ---- */
     const $ = id => document.getElementById(id);
+
+    /* log(msg, type)
+       Acepta string o Error. Si es Error externo (red, SDK, API),
+       conserva el stack / mensaje completo para diagnóstico.
+       Tipos: "ok" (verde), "warn" (ámbar), "err" (rojo). */
     const log = (msg, type = "") => {
       const el = $("log");
-      if (!el) { console.log(msg); return; }
       const now = new Date().toLocaleTimeString("es-ES");
+
+      let text;
+      if (msg instanceof Error) {
+        text = `${msg.name}: ${msg.message}`;
+        if (msg.stack) {
+          // Adjuntamos la primera línea del stack para no inundar el log.
+          const firstStackLine = msg.stack.split("\n").slice(1, 2).join("").trim();
+          if (firstStackLine) text += ` @ ${firstStackLine}`;
+        }
+        if (msg.cause) {
+          try { text += ` | cause: ${typeof msg.cause === "object" ? JSON.stringify(msg.cause) : msg.cause}`; } catch (_) { }
+        }
+      } else if (typeof msg === "object" && msg !== null) {
+        try { text = JSON.stringify(msg); } catch (_) { text = String(msg); }
+      } else {
+        text = String(msg);
+      }
+
+      // Siempre dejamos huella en consola (incluso si la UI del log no existe)
+      if (type === "err") console.error(text, msg);
+      else if (type === "warn") console.warn(text);
+      else console.log(text);
+
+      if (!el) return;
       const line = document.createElement("div");
       if (type) line.className = type;
-      line.textContent = `[${now}] ${msg}`;
+      line.textContent = `[${now}] ${text}`;
       el.appendChild(line);
       el.scrollTop = el.scrollHeight;
-      console.log(msg);
     };
+
+    /* Captura global de errores no manejados (incluye los del SDK de Spotify
+       y promesas rechazadas) para que SIEMPRE queden en el registro del
+       sistema, incluso cuando vienen de fuera de nuestra aplicación. */
+    window.addEventListener("error", (ev) => {
+      try {
+        log(`💥 Error global: ${ev.message} @ ${ev.filename || ""}:${ev.lineno || 0}`, "err");
+      } catch (_) { }
+    });
+    window.addEventListener("unhandledrejection", (ev) => {
+      try {
+        const r = ev.reason;
+        const text = r instanceof Error ? `${r.name}: ${r.message}` : (typeof r === "string" ? r : JSON.stringify(r));
+        log(`💥 Promesa rechazada sin manejar: ${text}`, "err");
+      } catch (_) { }
+    });
     const toast = (msg, type = "") => {
       const t = document.createElement("div");
       t.className = "toast" + (type === "error" ? " error" : "");
@@ -1403,7 +1454,8 @@
         if (d.artistIdCache) artistIdCache = d.artistIdCache;
         if (d.playedThisShift) state.playedThisShift = new Set(d.playedThisShift);
         if (d.lastShift) state.lastShift = d.lastShift;
-        if (typeof d.crossfadeSec === "number") state.crossfadeSec = d.crossfadeSec;
+        // Fade automático queda desactivado siempre, ignoramos el valor guardado.
+        state.crossfadeSec = 0;
       } catch (e) { console.error(e) }
     };
 
@@ -1418,13 +1470,8 @@
       return isNight ? "night" : "day";
     }
     function getAllowedGenres() {
-      const shift = getCurrentShift();
-      return [...state.activeGenres].filter(gid => {
-        const g = GENRE_SEEDS.find(x => x.id === gid);
-        if (!g) return false;
-        if (shift === "night" && !g.nightSafe) return false;
-        return true;
-      });
+      // Sin filtro de turno: suena todo lo que el usuario tenga seleccionado.
+      return [...state.activeGenres].filter(gid => GENRE_SEEDS.some(x => x.id === gid));
     }
 
     /* ==========================================================
@@ -1500,36 +1547,91 @@
       return true;
     }
 
+    /* Refresh de token con:
+       - una única promesa "in-flight" (evita refresh concurrentes que producen
+         "failed to remove token / server_error" al chocar dos requests)
+       - hasta 3 reintentos con backoff ante 5xx/network/server_error
+       - mantiene el último token válido si el refresh falla temporalmente
+       (no rompemos el SDK por eso) */
     async function refreshAccessToken() {
       if (!state.refreshToken) return false;
-      const body = new URLSearchParams({
-        client_id: state.clientId,
-        grant_type: "refresh_token",
-        refresh_token: state.refreshToken,
-      });
-      try {
-        const res = await fetch("https://accounts.spotify.com/api/token", {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body
+      if (state._refreshPromise) return state._refreshPromise;
+
+      state._refreshPromise = (async () => {
+        const body = new URLSearchParams({
+          client_id: state.clientId,
+          grant_type: "refresh_token",
+          refresh_token: state.refreshToken,
         });
-        const data = await res.json();
-        if (!data.access_token) { log("No se pudo refrescar el token: " + JSON.stringify(data), "err"); return false; }
-        state.token = data.access_token;
-        if (data.refresh_token) state.refreshToken = data.refresh_token;
-        state.tokenExpiresAt = Date.now() + (data.expires_in * 1000) - 30000;
-        save();
-        log("✓ Token refrescado (válido " + Math.round(data.expires_in / 60) + " min)", "ok");
-        return true;
-      } catch (e) {
-        log("Error refrescando token: " + e.message, "err");
+
+        const MAX_TRIES = 3;
+        for (let attempt = 1; attempt <= MAX_TRIES; attempt++) {
+          try {
+            const res = await fetch("https://accounts.spotify.com/api/token", {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body
+            });
+            const text = await res.text();
+            let data; try { data = JSON.parse(text); } catch (_) { data = { raw: text }; }
+
+            // Respuesta exitosa
+            if (res.ok && data.access_token) {
+              state.token = data.access_token;
+              if (data.refresh_token) state.refreshToken = data.refresh_token;
+              state.tokenExpiresAt = Date.now() + (data.expires_in * 1000) - 60000; // -60s margen
+              save();
+              log("✓ Token refrescado (válido " + Math.round(data.expires_in / 60) + " min)", "ok");
+              return true;
+            }
+
+            // Errores transitorios → reintentar
+            const errCode = (data && data.error) || "";
+            const errDesc = (data && data.error_description) || "";
+            const transient = res.status >= 500
+              || errCode === "server_error"
+              || /failed to remove token/i.test(errDesc);
+
+            if (transient && attempt < MAX_TRIES) {
+              const wait = 800 * attempt;
+              log(`⚠ Refresh token transitorio (intento ${attempt}/${MAX_TRIES}): ${errCode || res.status} ${errDesc}. Reintentando en ${wait}ms…`, "warn");
+              await sleep(wait);
+              continue;
+            }
+
+            // Error definitivo
+            if (errCode === "invalid_grant") {
+              log("⛔ refresh_token inválido (sesión revocada). Es necesario volver a iniciar sesión.", "err");
+              toast("Sesión expirada — vuelve a iniciar sesión", "error");
+              return false;
+            }
+
+            log(`⛔ No se pudo refrescar el token: error=${errCode || res.status}, error_description=${errDesc || "sin detalle"} | raw=${text.slice(0, 300)}`, "err");
+            return false;
+
+          } catch (e) {
+            // Error de red — reintentar si quedan intentos
+            if (attempt < MAX_TRIES) {
+              const wait = 800 * attempt;
+              log(`⚠ Refresh token red (intento ${attempt}/${MAX_TRIES}): ${e.message}. Reintentando en ${wait}ms…`, "warn");
+              await sleep(wait);
+              continue;
+            }
+            log(`⛔ Error refrescando token: ${e.message} | stack: ${(e.stack || "").split("\n")[1] || ""}`, "err");
+            return false;
+          }
+        }
         return false;
-      }
+      })();
+
+      try { return await state._refreshPromise; }
+      finally { state._refreshPromise = null; }
     }
 
     async function ensureValidToken() {
       if (!state.token) return false;
-      if (Date.now() >= state.tokenExpiresAt) {
+      // Refrescamos 90 segundos antes para no toparnos con expiración mid-request.
+      if (Date.now() >= (state.tokenExpiresAt - 90000)) {
         return await refreshAccessToken();
       }
       return true;
@@ -1763,91 +1865,105 @@
     }
 
     /* ==========================================================
-       Crossfade aproximado
-       El Spotify Web Playback SDK no soporta crossfade real
-       (un solo stream de audio). Lo simulamos con un fade-out
-       de N segundos al final de cada track. Cuando arranca la
-       siguiente, restauramos el volumen instantáneamente.
+       Crossfade DESACTIVADO
+       El usuario es quien controla el volumen. La app no lo
+       modifica automáticamente. Mantenemos las funciones como
+       no-op para compatibilidad con las llamadas existentes.
        ========================================================== */
     function cancelCrossfade() {
       if (state._fadeStartTimer) { clearTimeout(state._fadeStartTimer); state._fadeStartTimer = null; }
       if (state._fadeStepInterval) { clearInterval(state._fadeStepInterval); state._fadeStepInterval = null; }
-      // Restaurar volumen sin esperar — la próxima canción debe arrancar al volumen normal
-      try { state.player?.setVolume(state.volume); } catch (_) { }
+      // No tocamos el volumen — el usuario manda.
     }
 
-    function scheduleCrossfade(track) {
+    function scheduleCrossfade(/* track */) {
+      // Intencionalmente vacío: NO hay fade automático.
       cancelCrossfade();
-      const sec = Number(state.crossfadeSec) || 0;
-      if (sec <= 0) return;                             // crossfade desactivado
-      const dur = Number(track?.duration_ms) || 0;
-      if (dur < (sec + 4) * 1000) return;               // pista muy corta — no fundir
-
-      // El watchdog/avance ya programa el siguiente. Acá solo bajamos el volumen.
-      const startInMs = Math.max(0, dur - sec * 1000);
-      state._fadeStartTimer = setTimeout(() => {
-        const target = (state.volume || 0.7) * 0.05;    // baja hasta 5% del volumen actual
-        const startVol = state.volume || 0.7;
-        const stepMs = 120;
-        const totalSteps = Math.max(1, Math.floor((sec * 1000) / stepMs));
-        let step = 0;
-        state._fadeStepInterval = setInterval(() => {
-          step++;
-          const progress = Math.min(1, step / totalSteps);
-          // curva ease-out cuadrática para que el fade no sea lineal
-          const v = startVol - (startVol - target) * (1 - Math.pow(1 - progress, 2));
-          try { state.player?.setVolume(Math.max(target, v)); } catch (_) { }
-          if (step >= totalSteps) {
-            clearInterval(state._fadeStepInterval);
-            state._fadeStepInterval = null;
-          }
-        }, stepMs);
-      }, startInMs);
     }
 
-    /* Helper: intenta reproducir, si falla por device inactivo o 403 reintenta
-       transfiriendo el playback al device de la app. Si el device no existe
-       (404 "Device not found"), re-descubre o recrea el device.
+    /* Helper: intenta reproducir con recuperación robusta.
+       Causas comunes del error "Device problem":
+         · 404 "Device not found"     → Spotify perdió/rehizó el device del SDK
+         · 403 PREMIUM_REQUIRED       → la cuenta no es Premium
+         · 403 (otro)                 → otra sesión Spotify tomó control,
+                                        o token quedó marginal — re-transferimos
+         · 502/503/504                → caída transitoria del backend Spotify
+         · 401                        → token expirado: lo refrescamos y reintentamos
+       Reintentamos hasta 3 veces con backoff incremental.
     */
     async function playWithRetry(uri) {
       const buildBody = () => JSON.stringify({ uris: [uri] });
 
-      // Si el device_id está vacío, primero conseguir uno
+      // Asegurar token fresco antes de cualquier intento.
+      await ensureValidToken();
+
+      // Si el device_id está vacío, primero conseguir uno.
       if (!state.deviceId) {
         const id = await findOrRecreateDevice();
         if (!id) throw new Error("Sin device disponible. Recargá la pestaña.");
         state.deviceId = id;
-        try { await transferPlaybackHere(true); } catch (_) { }
-        await sleep(800);
-      }
-
-      try {
-        await api(`/me/player/play?device_id=${state.deviceId}`, { method: "PUT", body: buildBody() });
-        return;
-      } catch (e) {
-        const msg = (e.message || "").toString();
-        const is404 = msg.includes("404") || msg.includes("Device not found") || msg.includes("NO_ACTIVE_DEVICE");
-        const is403 = msg.includes("403");
-        const is502 = msg.includes("502") || msg.includes("503");
-
-        if (!(is404 || is403 || is502)) throw e;
-
-        log(`Device problem (${msg.slice(0, 80)}…). Re-descubriendo device…`, "warn");
-
-        // 1) Buscar nuestro device por nombre — quizás Spotify le asignó otro id
-        const newId = await findOrRecreateDevice();
-        if (!newId) {
-          throw new Error("No pude recuperar el device de Turno Player. Recargá la pestaña.");
-        }
-        state.deviceId = newId;
-
-        // 2) Transferir playback al device recuperado
-        try { await transferPlaybackHere(true); } catch (_) { }
+        try { await transferPlaybackHere(false); } catch (_) { }
         await sleep(900);
-
-        // 3) Retry final
-        await api(`/me/player/play?device_id=${state.deviceId}`, { method: "PUT", body: buildBody() });
       }
+
+      let lastErr = null;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          await api(`/me/player/play?device_id=${state.deviceId}`, { method: "PUT", body: buildBody() });
+          return; // ✓
+        } catch (e) {
+          lastErr = e;
+          const msg = (e.message || "").toString();
+          const status =
+            msg.includes("401") ? 401 :
+            msg.includes("403") ? 403 :
+            msg.includes("404") ? 404 :
+            (msg.includes("502") || msg.includes("503") || msg.includes("504")) ? 5 :
+            0;
+
+          // Errores no recuperables a este nivel
+          if (msg.includes("PREMIUM_REQUIRED") || /premium/i.test(msg)) {
+            throw new Error("La cuenta de Spotify no es Premium. Solo cuentas Premium pueden reproducir desde la API.");
+          }
+
+          // 401: token expirado mid-request
+          if (status === 401) {
+            log(`Device problem (intento ${attempt}/3): 401 token expirado, refrescando…`, "warn");
+            await refreshAccessToken();
+            await sleep(400);
+            continue;
+          }
+
+          // 404: device fantasma → re-descubrir
+          // 403: otra sesión tomó control → re-transferir aquí
+          // 5xx: caída transitoria → backoff
+          const is404 = status === 404 || msg.includes("Device not found") || msg.includes("NO_ACTIVE_DEVICE");
+          const is403 = status === 403;
+          const is5xx = status === 5;
+
+          if (!(is404 || is403 || is5xx)) {
+            // Tipo desconocido → mostramos detalle completo y abortamos
+            log(`Device problem (no recuperable): ${msg}`, "err");
+            throw e;
+          }
+
+          log(`Device problem (intento ${attempt}/3): ${msg.slice(0, 160)}`, "warn");
+
+          if (is404) {
+            const newId = await findOrRecreateDevice();
+            if (newId) state.deviceId = newId;
+          }
+
+          // Re-transferir y esperar con backoff
+          try { await transferPlaybackHere(false); } catch (_) { }
+          await sleep(700 * attempt);
+        }
+      }
+
+      // Agotamos reintentos: dejamos el error completo en el log para diagnóstico
+      const m = (lastErr && lastErr.message) || "desconocido";
+      log(`⛔ playWithRetry agotó reintentos. Último error: ${m}`, "err");
+      throw lastErr || new Error("playWithRetry: error desconocido");
     }
 
     /* Busca el device "Turno Player 24/7" en la lista de devices del usuario.
@@ -2037,7 +2153,7 @@
         };
         tryReconnect();
       });
-      player.addListener("player_state_changed", (s) => {
+      player.addListener("player_state_changed", async (s) => {
         if (!s) return;
         state.isPaused = s.paused;
         $("playBtn").textContent = s.paused ? "▶" : "⏸";
@@ -2050,13 +2166,36 @@
           if (img) $("cover").style.backgroundImage = `url('${img}')`;
         }
 
-        // El SDK a veces dispara paused:true y position:0 mientras carga una nueva canción.
-        // Usamos un debounce de 3 segundos basado en lastTrackChangeTime para no saltar accidentalmente.
-        if (s.paused && s.position === 0 && s.track_window.previous_tracks.length > 0 && !state.breakInProgress) {
-          if (!state.lastTrackChangeTime || Date.now() - state.lastTrackChangeTime > 3000) {
-            state.lastTrackChangeTime = Date.now();
-            playNextRandom();
-          }
+        /* Detección de fin de pista MUY conservadora.
+           Causa anterior de salto prematuro: el SDK emite varios estados
+           transitorios (paused:true, position:0) durante la carga de la
+           siguiente canción, y los confundíamos con "pista terminada".
+           Ahora exigimos:
+             · paused:true Y position:0
+             · pista actual con duración > 0 conocida
+             · NO esté en break / NO esté en advancingNext
+             · al menos 12s desde el último cambio de pista
+             · confirmamos consultando el estado real con getCurrentState() */
+        if (s.paused && s.position === 0
+          && s.track_window.previous_tracks.length > 0
+          && !state.breakInProgress
+          && !state.advancingNext
+          && t && t.duration_ms > 0) {
+
+          const sinceChange = Date.now() - (state.lastTrackChangeTime || 0);
+          if (sinceChange < 12000) return; // probable carga, no salto
+
+          // Doble verificación: pedir el estado al SDK 600ms después.
+          // Si la pista realmente terminó, sigue paused:true en pos 0.
+          await sleep(600);
+          try {
+            const recheck = await state.player?.getCurrentState();
+            if (recheck && recheck.paused && recheck.position === 0
+              && recheck.track_window?.current_track?.uri === t.uri) {
+              state.lastTrackChangeTime = Date.now();
+              playNextRandom();
+            }
+          } catch (_) { /* silencioso */ }
         }
       });
       player.addListener("initialization_error", ({ message }) => log("Init error: " + message, "err"));
@@ -2199,24 +2338,92 @@
       log(`⏸ Iniciando pausa ergonómica — Ejercicio ${file || 1}`, "warn");
       toast("🧘 Pausa ergonómica — ejercicios");
 
+      // Siempre intentaremos reanudar la música después.
+      // Recordamos el URI/posición actuales para reanudar exactamente desde ahí
+      // en caso de que pausar libere el stream y Spotify "olvide" el track.
+      let resumeUri = null, resumePos = 0;
       try {
         const st = await state.player?.getCurrentState();
-        state.wasPlayingBeforeBreak = st && !st.paused;
-        if (state.wasPlayingBeforeBreak) {
-          await state.player.pause();
+        state.wasPlayingBeforeBreak = !!(st && !st.paused);
+        if (st && st.track_window?.current_track) {
+          resumeUri = st.track_window.current_track.uri;
+          resumePos = st.position || 0;
         }
-      } catch (e) { log("No pude leer estado: " + e.message, "warn") }
+        if (state.wasPlayingBeforeBreak) {
+          try { await state.player.pause(); } catch (_) { }
+        }
+      } catch (e) {
+        log("No pude leer estado antes de pausa: " + e.message, "warn");
+      }
 
-      await playExerciseAudio(file);
-
+      // Reproducir el audio del ejercicio. Pase lo que pase (éxito, error,
+      // promise rejection), garantizamos la reanudación con try/finally.
       try {
-        if (state.wasPlayingBeforeBreak) {
-          await state.player.resume();
-          log("▶ Retomando música", "ok");
-        }
-      } catch (e) { log("Error reanudando: " + e.message, "err") }
+        await playExerciseAudio(file);
+      } catch (e) {
+        log("Audio del ejercicio falló: " + (e.message || e), "err");
+      } finally {
+        // Reanudar SIEMPRE (no sólo si estaba sonando antes) — el usuario quiere
+        // que la música reanude automáticamente al terminar los ejercicios.
+        await resumeMusicAfterBreak(resumeUri, resumePos);
+        state.breakInProgress = false;
+      }
+    }
 
-      state.breakInProgress = false;
+    async function resumeMusicAfterBreak(uri, posMs) {
+      // Estrategia escalonada:
+      //  1) state.player.resume()        — lo más rápido si nada se rompió
+      //  2) PUT /me/player/play          — reanudar via API
+      //  3) playWithRetry(uri) + seek    — re-arrancar la pista desde donde iba
+      //  4) playNextRandom()             — última opción: lanzar la siguiente
+      try {
+        await ensureValidToken();
+      } catch (_) { }
+
+      // Pequeña espera para que el AudioContext del ejercicio libere bien.
+      await sleep(250);
+
+      // Paso 1: resume() del SDK
+      try {
+        await state.player?.resume();
+        log("▶ Retomando música (SDK resume)", "ok");
+        return;
+      } catch (e) {
+        log("Resume SDK falló: " + (e.message || e) + " — probando API", "warn");
+      }
+
+      // Paso 2: PUT /me/player/play
+      try {
+        await api(`/me/player/play?device_id=${state.deviceId}`, { method: "PUT" });
+        log("▶ Retomando música (API play)", "ok");
+        return;
+      } catch (e) {
+        log("API play falló: " + (e.message || e) + " — re-lanzando pista", "warn");
+      }
+
+      // Paso 3: re-lanzar la misma pista en la posición previa
+      if (uri) {
+        try {
+          await playWithRetry(uri);
+          if (posMs > 2000) {
+            try {
+              await api(`/me/player/seek?position_ms=${posMs}&device_id=${state.deviceId}`, { method: "PUT" });
+            } catch (_) { }
+          }
+          log("▶ Retomando música (re-lanzando pista)", "ok");
+          return;
+        } catch (e) {
+          log("Re-lanzar pista falló: " + (e.message || e) + " — pasando a la siguiente", "warn");
+        }
+      }
+
+      // Paso 4: siguiente aleatoria
+      try {
+        await playNextRandom();
+        log("▶ Retomando con siguiente aleatoria", "ok");
+      } catch (e) {
+        log("⛔ No se pudo reanudar la música: " + (e.message || e), "err");
+      }
     }
 
     /* ==========================================================
@@ -2391,7 +2598,8 @@
           cur = await api("/me/player");
         } catch (e) {
           // 401/403/etc — el ensureValidToken adentro de api() ya intenta refrescar.
-          // Si igual falla, no hacemos nada en este ciclo.
+          // Dejamos rastro en el log para diagnóstico (sin saturarlo: cada 5s).
+          log("Watchdog: GET /me/player falló — " + (e.message || e), "warn");
           return;
         }
 
@@ -2421,23 +2629,27 @@
 
         // CASO 3: pausado pero debería estar sonando
         if (!cur.is_playing) {
+          // Gracia post cambio de pista para evitar saltos prematuros
+          if (Date.now() - (state.lastTrackChangeTime || 0) < WATCHDOG_TRACK_CHANGE_GRACE_MS) return;
           if (Date.now() - state.lastAutoResumeAt < 6000) return;
           state.lastAutoResumeAt = Date.now();
 
           const dur = cur.item?.duration_ms || 0;
           const pos = cur.progress_ms || 0;
-          // Si la canción terminó (cerca del fin o exactamente en 0) → siguiente
-          if (dur === 0 || pos === 0 || (dur - pos) < 3000) {
+          // Si la canción REALMENTE terminó (a < 1.5s del final, o pos=0 con dur>0
+          // tras la gracia anterior) → siguiente
+          if (dur === 0 || (dur > 0 && (dur - pos) < 1500)) {
             log("🛡 Watchdog: track terminado, siguiente canción…", "warn");
             await playNextRandom();
           } else {
-            // Si quedó pausado a mitad de la canción → reanudar
+            // Si quedó pausado a mitad de la canción → reanudar (no saltar).
             log("🛡 Watchdog: pausado detectado, reanudando…", "warn");
             try {
               await api(`/me/player/play?device_id=${state.deviceId}`, { method: "PUT" });
             } catch (e) {
-              // Si reanudar falla, fuerza siguiente
-              await playNextRandom();
+              log("🛡 Watchdog: reanudar falló: " + (e.message || e), "warn");
+              // No saltamos a la siguiente — eso provocaba el "salta a los pocos segundos".
+              // Si el problema es device fantasma, playWithRetry lo arregla más adelante.
             }
           }
           return;
@@ -2446,7 +2658,10 @@
         // CASO 4: track stuck — mismo URI y mismo progreso que el ciclo anterior
         const uri = cur.item.uri;
         const pos = cur.progress_ms || 0;
-        if (state.lastWatchdogUri === uri && state.lastWatchdogPos === pos && cur.is_playing) {
+        // No declaramos "stuck" si la pista acaba de cambiar — Spotify puede tardar
+        // unos ciclos en actualizar el campo progress_ms.
+        const recentlyChanged = Date.now() - (state.lastTrackChangeTime || 0) < WATCHDOG_TRACK_CHANGE_GRACE_MS;
+        if (state.lastWatchdogUri === uri && state.lastWatchdogPos === pos && cur.is_playing && !recentlyChanged) {
           state.stuckCounter++;
           if (state.stuckCounter >= WATCHDOG_STUCK_LIMIT) {
             log(`🛡 Watchdog: track stuck (${(WATCHDOG_INTERVAL_MS * WATCHDOG_STUCK_LIMIT / 1000)}s sin avanzar), saltando…`, "warn");
@@ -2519,8 +2734,10 @@
         updateProgressUI();
         renderNextRefresh();
 
-        if (state.token && Date.now() >= state.tokenExpiresAt - 60000) {
-          await refreshAccessToken();
+        // Refresh proactivo: 2 minutos antes de la expiración, sin bloquear
+        // y sin generar refresh concurrentes (refreshAccessToken está dedupado).
+        if (state.token && Date.now() >= state.tokenExpiresAt - 120000) {
+          refreshAccessToken().catch(e => log("Refresh proactivo falló: " + (e.message || e), "warn"));
         }
         const shift = getCurrentShift();
         if (shift !== state.lastShift && state.lastShift !== null) {
@@ -2640,14 +2857,11 @@
     function renderGenres() {
       const el = $("genresList");
       el.innerHTML = "";
-      const shift = getCurrentShift();
       GENRE_SEEDS.forEach(g => {
         const on = state.activeGenres.has(g.id);
-        const nightBlocked = shift === "night" && !g.nightSafe;
         const chip = document.createElement("div");
-        chip.className = "chip" + (on ? " on" : "") + (nightBlocked ? " night-off" : "");
-        chip.textContent = g.label + (nightBlocked ? " 🌙" : "");
-        chip.title = nightBlocked ? "Desactivado en turno noche" : "";
+        chip.className = "chip" + (on ? " on" : "");
+        chip.textContent = g.label;
         chip.onclick = () => {
           if (on) state.activeGenres.delete(g.id);
           else state.activeGenres.add(g.id);
@@ -2693,17 +2907,8 @@
       };
       $("vol").value = state.volume * 100;
 
-      // Crossfade selector
-      const cfSel = document.getElementById("crossfadeSel");
-      if (cfSel) {
-        cfSel.value = String(state.crossfadeSec ?? 8);
-        cfSel.onchange = (e) => {
-          state.crossfadeSec = Number(e.target.value) || 0;
-          save();
-          if (state.crossfadeSec === 0) cancelCrossfade();
-          log(state.crossfadeSec === 0 ? "Crossfade desactivado" : `Crossfade: ${state.crossfadeSec}s`, "ok");
-        };
-      }
+      // Fade automático eliminado — siempre 0. El volumen lo controla el usuario.
+      state.crossfadeSec = 0;
 
       $("nightStart").value = state.nightStart;
       $("nightEnd").value = state.nightEnd;
