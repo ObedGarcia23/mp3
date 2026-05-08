@@ -1339,6 +1339,11 @@
       advancingNext: false,      // flag para no programar varios "siguiente" simultáneos
       lastAutoResumeAt: 0,       // throttle para no resumir 1000 veces por segundo
       sdkReconnectAttempt: 0,
+      lastTrackChangeTime: 0,    // momento del último avance de pista
+      _playNextLock: false,      // mutex: una sola operación de avance a la vez
+      _currentTrackUri: null,    // último URI visto en el SDK (para detectar nueva pista)
+      _sawProgressForCurrent: false, // ¿hemos visto position > 5s en la pista actual?
+      _emptyPlayerCount: 0,      // ciclos consecutivos sin player → solo entonces autostart
     };
 
     // Cada cuántos ms se refresca el catálogo automáticamente
@@ -1716,16 +1721,17 @@
       }
     }
 
-    async function buildTrackPool() {
+    async function buildTrackPool(opts = {}) {
+      const append = !!opts.append;
       if (state.isBuildingPool) return;
       const allowed = getAllowedGenres();
       if (!allowed.length) {
         log("No hay géneros activos para este turno", "warn");
-        state.trackPool = [];
+        if (!append) state.trackPool = [];
         return;
       }
       state.isBuildingPool = true;
-      log("Construyendo pool de canciones para turno: " + getCurrentShift().toUpperCase() + "...");
+      log((append ? "Refill" : "Construyendo") + " pool de canciones para turno: " + getCurrentShift().toUpperCase() + "...");
 
       try {
         // Recolectamos todos los artistas posibles de los géneros activos
@@ -1772,27 +1778,40 @@
           throw new Error("No se encontraron canciones. Revisa tu conexión o el estado de tu app en Spotify.");
         }
 
-        // Dedup
+        // Dedup contra: ya reproducidas + (en modo append) las que ya están en el pool
         const seen = new Set();
+        const existing = append ? new Set(state.trackPool.map(t => t.uri)) : new Set();
         let unique = allTracks.filter(t => {
           if (seen.has(t.uri)) return false;
           if (state.playedThisShift.has(t.uri)) return false;
+          if (existing.has(t.uri)) return false;
           seen.add(t.uri);
           return true;
         });
 
         if (unique.length === 0 && allTracks.length > 0) {
+          if (append) {
+            log("Refill: no hay nuevas canciones únicas — manteniendo el catálogo actual.", "warn");
+            return;
+          }
           log("⚠️ Se agotaron las canciones únicas para este turno. Reiniciando historial del turno...", "warn");
           state.playedThisShift.clear();
           seen.clear();
           unique = allTracks.filter(t => { if (seen.has(t.uri)) return false; seen.add(t.uri); return true; });
         }
 
-        // Shuffle final
-        state.trackPool = unique.sort(() => Math.random() - 0.5);
+        // Shuffle final. En modo append concatenamos al final del pool actual
+        // — así el orden visible del catálogo NO cambia (las canciones que el
+        // usuario ya estaba viendo como "siguientes" siguen ahí).
+        const shuffled = unique.sort(() => Math.random() - 0.5);
+        if (append) {
+          state.trackPool = state.trackPool.concat(shuffled);
+        } else {
+          state.trackPool = shuffled;
+        }
         state.lastShift = getCurrentShift();
         state.nextPoolRefresh = Date.now() + POOL_REFRESH_MS;
-        log(`✓ ${unique.length} canciones cargadas (turno ${state.lastShift}) — próximo refresh en 2h`, "ok");
+        log(`✓ ${shuffled.length} canciones ${append ? "agregadas (total: " + state.trackPool.length + ")" : "cargadas"} (turno ${state.lastShift}) — próximo refresh en 2h`, "ok");
         renderPool();
         renderNextRefresh();
 
@@ -1804,63 +1823,112 @@
     }
 
     async function playNextRandom() {
-      if (!state.deviceId) {
-        toast("Esperando conexión con Spotify...", "warn");
+      // LOCK: garantiza que no haya dos avances en paralelo.
+      // Sin este lock, el listener del SDK + el watchdog podían disparar
+      // playNextRandom casi al mismo tiempo y cada llamada hacía shift()
+      // del pool, "comiéndose" canciones del catálogo sin reproducirlas.
+      if (state._playNextLock) {
+        log("playNextRandom: ya hay un avance en curso, ignorando", "warn");
         return;
       }
-
-      if (getCurrentShift() !== state.lastShift || !state.trackPool.length) {
-        if (state.isBuildingPool) {
-          toast("Construyendo catálogo... espera un momento", "warn");
-          let tries = 0;
-          while (state.isBuildingPool && tries < 20) {
-            await sleep(500);
-            tries++;
-          }
-          if (!state.trackPool.length) {
-            setTimeout(playNextRandom, 5000);
-            return;
-          }
-        } else {
-          await buildTrackPool();
-          if (!state.trackPool.length) {
-            toast("No hay canciones disponibles", "error");
-            setTimeout(playNextRandom, 10000);
-            return;
-          }
-        }
-      }
-
-      const track = state.trackPool.shift();
-      state.playedThisShift.add(track.uri);
-      save(); // guardamos historial del turno
-      if (state.trackPool.length < 5 && !state.isBuildingPool) {
-        buildTrackPool().catch(e => log(e.message, "err"));
-      }
-
-      // Guardar en historial (máximo 50)
-      if (state.currentTrack) {
-        state.history.push({ uri: state.currentTrack.uri, name: state.currentTrack.name, artists: state.currentTrack.artists });
-        if (state.history.length > 50) state.history.shift();
-      }
+      state._playNextLock = true;
+      state.advancingNext = true;
+      let deferredRetry = false;
 
       try {
-        state.lastTrackChangeTime = Date.now();
-        cancelCrossfade();                          // matar fade de la pista anterior
-        await playWithRetry(track.uri);
-        log("▶ " + track.name + " — " + track.artists.map(a => a.name).join(", "));
+        if (!state.deviceId) {
+          toast("Esperando conexión con Spotify...", "warn");
+          return;
+        }
 
-        // Ajustes de estado en paralelo para no bloquear
-        api("/me/player/shuffle?state=false", { method: "PUT" }).catch(() => { });
-        api("/me/player/repeat?state=off", { method: "PUT" }).catch(() => { });
+        if (getCurrentShift() !== state.lastShift || !state.trackPool.length) {
+          if (state.isBuildingPool) {
+            toast("Construyendo catálogo... espera un momento", "warn");
+            let tries = 0;
+            while (state.isBuildingPool && tries < 20) {
+              await sleep(500);
+              tries++;
+            }
+            if (!state.trackPool.length) {
+              setTimeout(playNextRandom, 5000);
+              return;
+            }
+          } else {
+            await buildTrackPool();
+            if (!state.trackPool.length) {
+              toast("No hay canciones disponibles", "error");
+              setTimeout(playNextRandom, 10000);
+              return;
+            }
+          }
+        }
 
-        renderPool();
-        scheduleCrossfade(track);                   // programa el fade-out de esta pista
-      } catch (e) {
-        log("Error reproduciendo: " + e.message, "err");
-        explainPlaybackError(e);
-        log("Saltando a la siguiente canción en 3 segundos...", "warn");
-        setTimeout(playNextRandom, 3000);
+        // Tomamos pool[0] pero NO lo borramos aún — solo cuando estemos
+        // seguros de que la API aceptó el play. Así no se pierde la pista
+        // del catálogo si falla la reproducción.
+        const track = state.trackPool[0];
+        if (!track) return;
+
+        // Guardar en historial (máximo 50)
+        if (state.currentTrack && state.currentTrack.uri !== track.uri) {
+          state.history.push({ uri: state.currentTrack.uri, name: state.currentTrack.name, artists: state.currentTrack.artists });
+          if (state.history.length > 50) state.history.shift();
+        }
+
+        try {
+          state.lastTrackChangeTime = Date.now();
+          state._sawProgressForCurrent = false;
+          cancelCrossfade();
+          await playWithRetry(track.uri);
+
+          // ÉXITO: ahora sí lo sacamos del pool y lo marcamos como reproducido.
+          state.trackPool.shift();
+          state.playedThisShift.add(track.uri);
+          save();
+
+          log("▶ " + track.name + " — " + track.artists.map(a => a.name).join(", "));
+
+          api("/me/player/shuffle?state=false", { method: "PUT" }).catch(() => { });
+          api("/me/player/repeat?state=off", { method: "PUT" }).catch(() => { });
+
+          // Refill del pool en modo APPEND cuando quede poco — así el
+          // orden visible del catálogo no cambia repentinamente.
+          if (state.trackPool.length < 5 && !state.isBuildingPool) {
+            buildTrackPool({ append: true }).catch(e => log("Refill pool: " + (e.message || e), "warn"));
+          }
+
+          renderPool();
+          scheduleCrossfade(track);
+        } catch (e) {
+          log("Error reproduciendo: " + e.message, "err");
+          explainPlaybackError(e);
+          // No removemos la pista del pool — sigue al frente.
+          // Pasamos a la siguiente solo si la pista actual es problemática
+          // (404 track no disponible en mercado): la sacamos para no quedar trabados.
+          const m = (e.message || "").toString();
+          if (m.includes("404") && /track/i.test(m)) {
+            log("Pista no disponible en mercado, descartando del catálogo", "warn");
+            state.trackPool.shift();
+            renderPool();
+          }
+          // Marcamos que el finally NO debe liberar los locks ahora —
+          // los liberará el setTimeout de retry abajo.
+          deferredRetry = true;
+          // Esperamos 5 segundos antes de reintentar — sin recursión inmediata.
+          setTimeout(() => {
+            state.advancingNext = false;
+            state._playNextLock = false;
+            playNextRandom();
+          }, 5000);
+        }
+      } finally {
+        if (!deferredRetry) {
+          state._playNextLock = false;
+          // advancingNext lo dejamos true por 1.5s extra — el SDK puede emitir
+          // estados transitorios (paused/pos=0) justo después del play que NO
+          // son fin de pista. Eso evita rebotes.
+          setTimeout(() => { state.advancingNext = false; }, 1500);
+        }
       }
     }
 
@@ -2027,49 +2095,71 @@
     }
 
     async function playSpecificTrack(index) {
+      if (state._playNextLock) { log("playSpecificTrack ignorado, hay avance en curso", "warn"); return; }
       if (!state.deviceId) { toast("Esperando conexión con Spotify...", "warn"); return; }
 
-      const track = state.trackPool.splice(index, 1)[0];
-      state.playedThisShift.add(track.uri);
-      save(); // guardamos historial del turno
-
-      if (state.currentTrack) {
-        state.history.push({ uri: state.currentTrack.uri, name: state.currentTrack.name, artists: state.currentTrack.artists });
-        if (state.history.length > 50) state.history.shift();
-      }
-
+      state._playNextLock = true;
+      state.advancingNext = true;
       try {
-        state.lastTrackChangeTime = Date.now();
-        cancelCrossfade();
-        await playWithRetry(track.uri);
-        log("▶ " + track.name + " — " + track.artists.map(a => a.name).join(", "));
-        api("/me/player/shuffle?state=false", { method: "PUT" }).catch(() => { });
-        api("/me/player/repeat?state=off", { method: "PUT" }).catch(() => { });
-        renderPool();
-        scheduleCrossfade(track);
-      } catch (e) {
-        log("Error reproduciendo: " + e.message, "err");
-        explainPlaybackError(e);
-        // Restaurar si falla
-        state.trackPool.splice(index, 0, track);
-        renderPool();
+        const track = state.trackPool[index];
+        if (!track) return;
+
+        if (state.currentTrack && state.currentTrack.uri !== track.uri) {
+          state.history.push({ uri: state.currentTrack.uri, name: state.currentTrack.name, artists: state.currentTrack.artists });
+          if (state.history.length > 50) state.history.shift();
+        }
+
+        try {
+          state.lastTrackChangeTime = Date.now();
+          state._sawProgressForCurrent = false;
+          cancelCrossfade();
+          await playWithRetry(track.uri);
+
+          // Éxito: lo sacamos del pool ahora.
+          state.trackPool.splice(index, 1);
+          state.playedThisShift.add(track.uri);
+          save();
+
+          log("▶ " + track.name + " — " + track.artists.map(a => a.name).join(", "));
+          api("/me/player/shuffle?state=false", { method: "PUT" }).catch(() => { });
+          api("/me/player/repeat?state=off", { method: "PUT" }).catch(() => { });
+          renderPool();
+          scheduleCrossfade(track);
+        } catch (e) {
+          log("Error reproduciendo: " + e.message, "err");
+          explainPlaybackError(e);
+          // No tocamos el pool — el track sigue allí para volver a intentarse.
+        }
+      } finally {
+        state._playNextLock = false;
+        setTimeout(() => { state.advancingNext = false; }, 1500);
       }
     }
 
     async function playPrevious() {
+      if (state._playNextLock) return;
       if (!state.history.length) {
         toast("No hay canciones previas en el historial");
         return;
       }
-      const track = state.history.pop();
+      state._playNextLock = true;
+      state.advancingNext = true;
       try {
-        state.lastTrackChangeTime = Date.now();
-        await api(`/me/player/play?device_id=${state.deviceId}`, {
-          method: "PUT",
-          body: JSON.stringify({ uris: [track.uri] })
-        });
-        log("⏮ Volviendo a: " + track.name);
-      } catch (e) { log("Error historial: " + e.message, "err"); }
+        const track = state.history.pop();
+        try {
+          state.lastTrackChangeTime = Date.now();
+          state._sawProgressForCurrent = false;
+          await playWithRetry(track.uri);
+          log("⏮ Volviendo a: " + track.name);
+        } catch (e) {
+          log("Error historial: " + e.message, "err");
+          // Devolvemos al historial para no perderlo
+          state.history.push(track);
+        }
+      } finally {
+        state._playNextLock = false;
+        setTimeout(() => { state.advancingNext = false; }, 1500);
+      }
     }
 
     async function transferPlaybackHere(forcePlay = false) {
@@ -2164,39 +2254,47 @@
           $("trackArtist").textContent = t.artists.map(a => a.name).join(", ");
           const img = t.album.images?.[0]?.url;
           if (img) $("cover").style.backgroundImage = `url('${img}')`;
+
+          // ¿Es una pista nueva? Reseteamos los flags de progreso.
+          if (t.uri !== state._currentTrackUri) {
+            state._currentTrackUri = t.uri;
+            state._sawProgressForCurrent = false;
+          }
         }
 
-        /* Detección de fin de pista MUY conservadora.
-           Causa anterior de salto prematuro: el SDK emite varios estados
-           transitorios (paused:true, position:0) durante la carga de la
-           siguiente canción, y los confundíamos con "pista terminada".
-           Ahora exigimos:
-             · paused:true Y position:0
-             · pista actual con duración > 0 conocida
-             · NO esté en break / NO esté en advancingNext
-             · al menos 12s desde el último cambio de pista
-             · confirmamos consultando el estado real con getCurrentState() */
-        if (s.paused && s.position === 0
-          && s.track_window.previous_tracks.length > 0
-          && !state.breakInProgress
-          && !state.advancingNext
-          && t && t.duration_ms > 0) {
+        // Marcamos que vimos progreso real (>5s) en la pista actual.
+        // Solo declaramos "fin de pista" si vimos progreso Y ahora estamos
+        // en pos=0/paused. Esto evita los falsos saltos durante la carga
+        // inicial de cada canción (cuando la SDK emite varios paused:true
+        // pos:0 sin que la pista haya empezado realmente).
+        if (s.position > 5000) state._sawProgressForCurrent = true;
 
-          const sinceChange = Date.now() - (state.lastTrackChangeTime || 0);
-          if (sinceChange < 12000) return; // probable carga, no salto
+        if (state.breakInProgress) return;
+        if (state.advancingNext) return;
+        if (state._playNextLock) return;
 
-          // Doble verificación: pedir el estado al SDK 600ms después.
-          // Si la pista realmente terminó, sigue paused:true en pos 0.
-          await sleep(600);
-          try {
-            const recheck = await state.player?.getCurrentState();
-            if (recheck && recheck.paused && recheck.position === 0
-              && recheck.track_window?.current_track?.uri === t.uri) {
-              state.lastTrackChangeTime = Date.now();
-              playNextRandom();
-            }
-          } catch (_) { /* silencioso */ }
-        }
+        const trackEnded = s.paused
+          && s.position === 0
+          && state._sawProgressForCurrent
+          && t && t.duration_ms > 0;
+
+        if (!trackEnded) return;
+
+        // Re-verificamos 700ms después con el SDK directamente — algunos
+        // navegadores emiten un evento intermedio antes de cargar la
+        // siguiente y no queremos saltarnos la real.
+        await sleep(700);
+        let confirm = null;
+        try { confirm = await state.player?.getCurrentState(); } catch (_) { }
+        if (!confirm) return;
+        if (!confirm.paused) return;            // ya empezó algo nuevo
+        if (confirm.position !== 0) return;     // no es fin real
+        if (confirm.track_window?.current_track?.uri !== t.uri) return;
+
+        // Real end-of-track confirmado.
+        state._sawProgressForCurrent = false;
+        state.lastTrackChangeTime = Date.now();
+        playNextRandom();
       });
       player.addListener("initialization_error", ({ message }) => log("Init error: " + message, "err"));
       player.addListener("authentication_error", ({ message }) => {
@@ -2379,6 +2477,11 @@
       try {
         await ensureValidToken();
       } catch (_) { }
+
+      // Marcamos que la pista actual ya tuvo progreso real — así si reanudamos
+      // y el SDK emite un paused/pos=0 fugaz NO lo confundamos con fin de pista.
+      // El listener pondrá _sawProgressForCurrent=true cuando vea pos>5s otra vez.
+      state.lastTrackChangeTime = Date.now();
 
       // Pequeña espera para que el AudioContext del ejercicio libere bien.
       await sleep(250);
@@ -2590,76 +2693,84 @@
         if (!state.watchdog247) return;          // modo 24/7 deshabilitado
         if (state.breakInProgress) return;       // no interferir con ejercicio
         if (!state.token || !state.deviceId) return;
-        if (state.isBuildingPool && !state.trackPool.length) return; // todavía sin canciones
+        if (state.isBuildingPool && !state.trackPool.length) return;
+        if (state._playNextLock || state.advancingNext) return;  // hay avance en curso
 
         // Consultar estado actual de Spotify (no del SDK, sino de la cuenta)
         let cur;
         try {
           cur = await api("/me/player");
         } catch (e) {
-          // 401/403/etc — el ensureValidToken adentro de api() ya intenta refrescar.
-          // Dejamos rastro en el log para diagnóstico (sin saturarlo: cada 5s).
           log("Watchdog: GET /me/player falló — " + (e.message || e), "warn");
           return;
         }
 
-        // CASO 1: nunca se inició playback en esta cuenta
+        // CASO 1: la API REST devolvió 204/null. Eso NO siempre significa que
+        // estemos sin música — el SDK puede estar sonando perfectamente
+        // mientras el endpoint REST tarda en propagar. Solo arrancamos si
+        // PASARON varios ciclos consecutivos sin player.
         if (!cur || !cur.item) {
-          if (Date.now() - state.lastAutoResumeAt < 8000) return; // throttle
+          let sdkState = null;
+          try { sdkState = await state.player?.getCurrentState(); } catch (_) { }
+          const sdkHasTrack = !!(sdkState && sdkState.track_window?.current_track);
+          if (sdkHasTrack && !sdkState.paused) {
+            // El SDK está sonando — la API REST tiene lag, no hagamos nada.
+            state._emptyPlayerCount = 0;
+            return;
+          }
+          state._emptyPlayerCount = (state._emptyPlayerCount || 0) + 1;
+          // Esperamos 4 ciclos consecutivos (≈20s) sin nada antes de arrancar.
+          if (state._emptyPlayerCount < 4) return;
+          if (Date.now() - state.lastAutoResumeAt < 15000) return;
           state.lastAutoResumeAt = Date.now();
-          log("🛡 Watchdog: sin playback activo, iniciando…", "warn");
+          state._emptyPlayerCount = 0;
+          log("🛡 Watchdog: sin playback activo (≥20s), iniciando…", "warn");
           await playNextRandom();
           return;
         }
+        state._emptyPlayerCount = 0;
 
-        // CASO 2: otro device tomó el control (móvil, desktop app, etc.)
-        if (cur.device && cur.device.id !== state.deviceId) {
-          if (Date.now() - state.lastAutoResumeAt < 8000) return;
+        // CASO 2: otro device REAL tomó el control. Solo lo declaramos así
+        // si el nombre del device es distinto de "Turno Player 24/7" — la
+        // misma instancia puede tener id diferente tras una reconexión SDK.
+        if (cur.device && cur.device.name !== "Turno Player 24/7") {
+          if (Date.now() - state.lastAutoResumeAt < 15000) return;
           state.lastAutoResumeAt = Date.now();
           log(`🛡 Watchdog: otro device (${cur.device.name}) tomó el control, recuperando…`, "warn");
-          await transferPlaybackHere(true);
-          await sleep(900);
-          // Re-consultar y si sigue sin sonar, lanzar siguiente
-          try {
-            const fresh = await api("/me/player");
-            if (!fresh || !fresh.is_playing) await playNextRandom();
-          } catch (e) { /* ignorar */ }
+          try { await transferPlaybackHere(true); } catch (_) { }
           return;
         }
+        // Si el id local quedó stale pero el nombre es el correcto, sincronizamos.
+        if (cur.device && cur.device.id !== state.deviceId && cur.device.name === "Turno Player 24/7") {
+          state.deviceId = cur.device.id;
+        }
 
-        // CASO 3: pausado pero debería estar sonando
+        // CASO 3: pausado a mitad de canción → reanudar (NO saltar).
         if (!cur.is_playing) {
-          // Gracia post cambio de pista para evitar saltos prematuros
           if (Date.now() - (state.lastTrackChangeTime || 0) < WATCHDOG_TRACK_CHANGE_GRACE_MS) return;
-          if (Date.now() - state.lastAutoResumeAt < 6000) return;
-          state.lastAutoResumeAt = Date.now();
+          if (Date.now() - state.lastAutoResumeAt < 10000) return;
 
           const dur = cur.item?.duration_ms || 0;
           const pos = cur.progress_ms || 0;
-          // Si la canción REALMENTE terminó (a < 1.5s del final, o pos=0 con dur>0
-          // tras la gracia anterior) → siguiente
-          if (dur === 0 || (dur > 0 && (dur - pos) < 1500)) {
-            log("🛡 Watchdog: track terminado, siguiente canción…", "warn");
-            await playNextRandom();
-          } else {
-            // Si quedó pausado a mitad de la canción → reanudar (no saltar).
-            log("🛡 Watchdog: pausado detectado, reanudando…", "warn");
+
+          // Solo reanudamos si quedó pausado claramente a mitad (>2s del fin
+          // y >5s del comienzo). Cerca del fin, dejamos que el listener
+          // del SDK detecte el end-of-track de forma natural.
+          if (dur > 0 && pos > 5000 && (dur - pos) > 3000) {
+            state.lastAutoResumeAt = Date.now();
+            log("🛡 Watchdog: pausado a mitad detectado, reanudando…", "warn");
             try {
               await api(`/me/player/play?device_id=${state.deviceId}`, { method: "PUT" });
             } catch (e) {
               log("🛡 Watchdog: reanudar falló: " + (e.message || e), "warn");
-              // No saltamos a la siguiente — eso provocaba el "salta a los pocos segundos".
-              // Si el problema es device fantasma, playWithRetry lo arregla más adelante.
             }
           }
           return;
         }
 
-        // CASO 4: track stuck — mismo URI y mismo progreso que el ciclo anterior
+        // CASO 4: track stuck — mismo URI y mismo progreso por mucho tiempo.
         const uri = cur.item.uri;
         const pos = cur.progress_ms || 0;
-        // No declaramos "stuck" si la pista acaba de cambiar — Spotify puede tardar
-        // unos ciclos en actualizar el campo progress_ms.
         const recentlyChanged = Date.now() - (state.lastTrackChangeTime || 0) < WATCHDOG_TRACK_CHANGE_GRACE_MS;
         if (state.lastWatchdogUri === uri && state.lastWatchdogPos === pos && cur.is_playing && !recentlyChanged) {
           state.stuckCounter++;
@@ -2676,24 +2787,10 @@
         state.lastWatchdogUri = uri;
         state.lastWatchdogPos = pos;
 
-        // CASO 5: track casi por terminar pero el evento end no se disparó.
-        // Programamos el avance con un timer corto.
-        const dur = cur.item.duration_ms || 0;
-        if (dur > 0 && (dur - pos) <= WATCHDOG_INTERVAL_MS && !state.advancingNext) {
-          state.advancingNext = true;
-          const wait = Math.max(0, dur - pos - 250);
-          setTimeout(async () => {
-            try {
-              const recheck = await api("/me/player");
-              // Si todavía suena la misma canción al final, fuerza siguiente
-              if (recheck && recheck.item && recheck.item.uri === uri) {
-                log("🛡 Watchdog: end-of-track, lanzando siguiente…");
-                await playNextRandom();
-              }
-            } catch (e) { /* ignorar */ }
-            state.advancingNext = false;
-          }, wait);
-        }
+        // CASO 5 (anterior): preempt end-of-track. ELIMINADO — ahora la
+        // detección del fin de pista la hace el listener player_state_changed
+        // con la lógica "vi progreso, ahora pos=0/paused". Es 100% confiable
+        // y evita los falsos avances que producía este caso.
       } catch (e) {
         log("Watchdog error: " + (e.message || e), "warn");
       }
