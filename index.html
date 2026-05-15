@@ -2716,15 +2716,13 @@
     document.addEventListener('keydown', unlockAudio, { once: false });
 
     /* ==========================================================
-       Audio para pausas ergonomicas
+       Audio para pausas ergonomicas (Supabase Storage)
        ========================================================== */
-    function getLocalExerciseUrl(exerciseId) {
-      const url = new URL(window.location.href);
-      url.search = "";
-      url.hash = "";
-      url.pathname = url.pathname.replace(/\/[^/]*$/, `/Ejercicio${exerciseId}.mp3`);
-      return url.toString();
-    }
+    const EXTERNAL_AUDIO_URLS = {
+      1: "https://kpmseufpfyvwoyvdqhtq.supabase.co/storage/v1/object/public/turno-player-audio/Ejercicio1.mp3",
+      2: "https://kpmseufpfyvwoyvdqhtq.supabase.co/storage/v1/object/public/turno-player-audio/Ejercicio2.mp3",
+      3: "https://kpmseufpfyvwoyvdqhtq.supabase.co/storage/v1/object/public/turno-player-audio/Ejercicio3.mp3"
+    };
 
     async function fetchArrayBufferWithTimeout(url, timeoutMs = 6000) {
       const controller = new AbortController();
@@ -2732,6 +2730,7 @@
       try {
         const response = await fetch(url, {
           signal: controller.signal,
+          mode: "cors",
           cache: "force-cache"
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -2749,11 +2748,12 @@
           try { await ctx.resume(); } catch(e) {}
         }
 
-        const audioUrl = getLocalExerciseUrl(exerciseId);
+        const audioUrl = EXTERNAL_AUDIO_URLS[exerciseId];
 
         try {
-          log(`▶ Cargando Ejercicio${exerciseId}.mp3 local...`, 'ok');
-          const arrayBuffer = await fetchArrayBufferWithTimeout(audioUrl, 6000);
+          if (!audioUrl) throw new Error("Ejercicio sin URL configurada");
+          log(`▶ Cargando Ejercicio${exerciseId}.mp3 desde Supabase...`, 'ok');
+          const arrayBuffer = await fetchArrayBufferWithTimeout(audioUrl, 10000);
           const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
 
           const source = ctx.createBufferSource();
@@ -2770,11 +2770,11 @@
           };
           
           source.start(0);
-          log(`🔊 Reproduciendo Ejercicio${exerciseId}.mp3`, 'ok');
+          log(`🔊 Reproduciendo Ejercicio${exerciseId}.mp3 desde Supabase`, 'ok');
           return;
 
         } catch (e) {
-          log(`Error cargando MP3 local: ${e.message}. Usando senal sintetizada...`, 'warn');
+          log(`Error cargando audio desde Supabase: ${e.message}. Usando senal sintetizada...`, 'warn');
         }
 
         // --- Fallback: señal sintetizada (SIEMPRE FUNCIONA) ---
