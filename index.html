@@ -1163,6 +1163,34 @@
 
   <!-- Spotify Web Playback SDK -->
   <script>
+    function isKnownSpotifyDrmNoise(args) {
+      const text = args.map(v => {
+        try {
+          return typeof v === "string" ? v : JSON.stringify(v);
+        } catch (_) {
+          return String(v);
+        }
+      }).join(" ").toLowerCase();
+
+      return text.includes("robustness level")
+        || text.includes("com.microsoft.playready.recommendation")
+        || text.includes("setservercertificate()")
+        || text.includes("generaterequest()");
+    }
+
+    (function muteKnownSpotifyDrmConsoleNoise() {
+      const originalWarn = console.warn.bind(console);
+      const originalError = console.error.bind(console);
+      console.warn = (...args) => {
+        if (isKnownSpotifyDrmNoise(args)) return;
+        originalWarn(...args);
+      };
+      console.error = (...args) => {
+        if (isKnownSpotifyDrmNoise(args)) return;
+        originalError(...args);
+      };
+    })();
+
     /* ---- Navegación por tabs (solo móvil) ---- */
     function switchTab(tab) {
       document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
@@ -1409,6 +1437,7 @@
        sistema, incluso cuando vienen de fuera de nuestra aplicación. */
     window.addEventListener("error", (ev) => {
       try {
+        if (isKnownSpotifyDrmNoise([ev.message])) return;
         log(`💥 Error global: ${ev.message} @ ${ev.filename || ""}:${ev.lineno || 0}`, "err");
       } catch (_) { }
     });
@@ -1416,6 +1445,7 @@
       try {
         const r = ev.reason;
         const text = r instanceof Error ? `${r.name}: ${r.message}` : (typeof r === "string" ? r : JSON.stringify(r));
+        if (isKnownSpotifyDrmNoise([text])) return;
         log(`💥 Promesa rechazada sin manejar: ${text}`, "err");
       } catch (_) { }
     });
@@ -2531,7 +2561,7 @@
           resumePos = st.position || 0;
         }
         if (state.wasPlayingBeforeBreak) {
-          try { await state.player.pause(); } catch (_) { }
+          await pauseSpotifyForBreak();
         }
       } catch (e) {
         log("No pude leer estado antes de pausa: " + e.message, "warn");
@@ -2549,6 +2579,36 @@
         await resumeMusicAfterBreak(resumeUri, resumePos);
         state.breakInProgress = false;
       }
+    }
+
+    async function pauseSpotifyForBreak() {
+      let paused = false;
+      try {
+        await state.player?.pause();
+        paused = true;
+      } catch (e) {
+        log("Pause SDK fallo: " + (e.message || e) + " - probando API", "warn");
+      }
+
+      try {
+        await playerCommandWithDeviceRetry(
+          id => `/me/player/pause?device_id=${id}`,
+          { method: "PUT" },
+          "Pausar para ejercicio"
+        );
+        paused = true;
+      } catch (e) {
+        log("Pause API fallo: " + (e.message || e), "warn");
+      }
+
+      await sleep(350);
+      try {
+        const confirm = await state.player?.getCurrentState();
+        if (confirm && !confirm.paused) {
+          log("Spotify sigue sonando tras pausar; el device se reintentara en segundo plano.", "warn");
+        }
+      } catch (_) { }
+      return paused;
     }
 
     async function resumeMusicAfterBreak(uri, posMs) {
@@ -2656,15 +2716,30 @@
     document.addEventListener('keydown', unlockAudio, { once: false });
 
     /* ==========================================================
-       Audio para pausas ergonómicas (Desde Hosting Externo)
+       Audio para pausas ergonomicas
        ========================================================== */
-    // URLs públicas del bucket de Supabase Storage
-    // Bucket: turno-player-audio  ·  Proyecto: tourshn (kpmseufpfyvwoyvdqhtq)
-    const EXTERNAL_AUDIO_URLS = {
-      1: "https://kpmseufpfyvwoyvdqhtq.supabase.co/storage/v1/object/public/turno-player-audio/Ejercicio1.mp3",
-      2: "https://kpmseufpfyvwoyvdqhtq.supabase.co/storage/v1/object/public/turno-player-audio/Ejercicio2.mp3",
-      3: "https://kpmseufpfyvwoyvdqhtq.supabase.co/storage/v1/object/public/turno-player-audio/Ejercicio3.mp3"
-    };
+    function getLocalExerciseUrl(exerciseId) {
+      const url = new URL(window.location.href);
+      url.search = "";
+      url.hash = "";
+      url.pathname = url.pathname.replace(/\/[^/]*$/, `/Ejercicio${exerciseId}.mp3`);
+      return url.toString();
+    }
+
+    async function fetchArrayBufferWithTimeout(url, timeoutMs = 6000) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const response = await fetch(url, {
+          signal: controller.signal,
+          cache: "force-cache"
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return await response.arrayBuffer();
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
 
     function playExerciseAudio(exerciseId) {
       return new Promise(async resolve => {
@@ -2674,25 +2749,11 @@
           try { await ctx.resume(); } catch(e) {}
         }
 
-        // Usamos la URL externa configurada arriba
-        const audioUrl = EXTERNAL_AUDIO_URLS[exerciseId];
+        const audioUrl = getLocalExerciseUrl(exerciseId);
 
         try {
-          log(`▶ Descargando ejercicio desde nube...`, 'ok');
-          
-          // Fetch con timeout para no quedar colgados si la red es lenta
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 seg máx
-
-          const response = await fetch(audioUrl, { 
-            signal: controller.signal,
-            mode: 'cors' 
-          });
-          clearTimeout(timeoutId);
-
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-          const arrayBuffer = await response.arrayBuffer();
+          log(`▶ Cargando Ejercicio${exerciseId}.mp3 local...`, 'ok');
+          const arrayBuffer = await fetchArrayBufferWithTimeout(audioUrl, 6000);
           const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
 
           const source = ctx.createBufferSource();
@@ -2709,11 +2770,11 @@
           };
           
           source.start(0);
-          log(`🔊 Reproduciendo audio desde nube`, 'ok');
+          log(`🔊 Reproduciendo Ejercicio${exerciseId}.mp3`, 'ok');
           return;
 
         } catch (e) {
-          log(`⚠ Error en nube: ${e.message}. Usando señal local...`, 'warn');
+          log(`Error cargando MP3 local: ${e.message}. Usando senal sintetizada...`, 'warn');
         }
 
         // --- Fallback: señal sintetizada (SIEMPRE FUNCIONA) ---
